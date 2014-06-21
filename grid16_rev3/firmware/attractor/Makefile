@@ -10,16 +10,10 @@ OBJCOPY = arm-none-eabi-objcopy
 OBJDUMP = arm-none-eabi-objdump
 SIZE = arm-none-eabi-size
 
-# Bootloader to include in whole-chip .hex image
-FCBOOT_IMAGE = ../bin/fc-boot-v101.hex
-
 #######################################################
 
 # The name of your project (used to name the compiled .dfu file)
-TARGET = fc-firmware
-
-# Temporary .hex file for application image only, without bootloader
-APP_HEX = app-image.hex
+TARGET = attractor-firmware
 
 # Sources
 C_FILES = \
@@ -59,7 +53,7 @@ LIBS = -lm
 
 OBJS := $(C_FILES:.c=.o) $(CPP_FILES:.cpp=.o)
 
-all: $(TARGET).dfu $(TARGET).hex
+all: $(TARGET).dfu
 
 $(TARGET).elf: $(OBJS) $(LDSCRIPT)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
@@ -69,21 +63,14 @@ $(TARGET).elf: $(OBJS) $(LDSCRIPT)
 	$(OBJCOPY) -O binary $< $@
 	$(DFU_SUFFIX) -a $@
 
-%.hex: %.elf
-	$(OBJCOPY) -O ihex $< $(APP_HEX)
-	(grep -v :00000001FF $(FCBOOT_IMAGE); cat $(APP_HEX)) > $@
-
 install: $(TARGET).dfu
 	$(DFU_UTIL) -d 1d50 -D $<
-
-benchmark: install
-	python benchmark.py
 
 # compiler generated dependency info
 -include $(OBJS:.o=.d)
 
 clean:
-	rm -f *.d *.o $(TARGET).elf $(TARGET).dfu $(APP_HEX)
+	rm -f *.d *.o $(TARGET).elf $(TARGET).dfu
 
 disassemble: $(TARGET).elf
 	$(OBJDUMP) -d $< | less

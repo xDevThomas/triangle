@@ -44,5 +44,5 @@
 
 #define VENDOR_ID               0x1d50    // OpenMoko
 #define PRODUCT_ID              0x607a    // Assigned to Fadecandy project
-#define DEVICE_VER              0x0108	  // BCD device version
-#define DEVICE_VER_STRING		"1.08"
+#define DEVICE_VER              0x0316	  // BCD device version (Special for Triangle Attractor)
+#define DEVICE_VER_STRING		"3.16"
