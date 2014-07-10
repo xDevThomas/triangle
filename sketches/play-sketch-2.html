@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script type="text/javascript" src="lib/paper-full.min.js"></script>
+<script type="text/javascript" src="lib/jsgif/b64.js"></script>
+<script type="text/javascript" src="lib/jsgif/LZWEncoder.js"></script>
+<script type="text/javascript" src="lib/jsgif/NeuQuant.js"></script>
+<script type="text/javascript" src="lib/jsgif/GIFEncoder.js"></script>
+<script type="text/paperscript" canvas="bitmap">
+
+    // Design sketch for "Play" project.
+    // (C) Micah Elizabeth Scott 2014
+
+    var Edge = function( a, b ) {
+        var numberOfMidpoints = 4;
+
+        this.a = a;
+        this.b = b;
+        this.cells = []
+
+        this.points = [a];
+        for (var i = 1; i <= numberOfMidpoints; i++) {
+            this.points.push(a + (b - a) * (i / (numberOfMidpoints + 1)));
+        }
+        this.points.push(b);
+
+        this.dotSymbol = new Symbol(new Path.Circle({
+            center: [0, 0],
+            radius: 0.9,
+            fillColor: new Color(0.2, 0.2, 0.4, 0.5)
+        }));
+
+        this.dots = [];
+        this.dots.push(this.dotSymbol.place(this.a));
+        this.dots.push(this.dotSymbol.place(this.b));
+
+        this.update();
+    }
+
+    Edge.prototype.update = function() {
+
+        var k = graph.k * ( (this.cells.length == 1) ?
+            graph.tensionK + graph.surfaceTensionK : 
+            graph.tensionK
+        );
+
+        // Edge contraction force
+        for (var i = 1; i < this.points.length; i++) {
+            var p1 = this.points[i - 1];
+            var p2 = this.points[i];
+            var force = (p2 - p1) * k;
+            p2.x = p2.x - force.x;
+            p2.y = p2.y - force.y;
+            p1.x = p1.x + force.x;
+            p1.y = p1.y + force.y;
+        }
+
+        // Ellipse force
+        for (var i = 0; i < this.points.length; i++) {
+            var p = this.points[i];
+            var np = graph.ellipse.getNearestPoint(p);
+            p.x = p.x + (np.x - p.x) * graph.k * graph.ellipseK;
+            p.y = p.y + (np.y - p.y) * graph.k * graph.ellipseK;
+        }
+
+        this.dots[0].position = this.a;
+        this.dots[1].position = this.b;
+    }
+
+    Edge.prototype.applyPressure = function( p ) {
+        // Apply pressure uniformly along the whole edge
+
+        p *= graph.k * graph.pressureK;
+
+        for (var i = 1; i < this.points.length; i++) {
+            var p1 = this.points[i - 1];
+            var p2 = this.points[i];
+            var d = p2 - p1;
+
+            // Normal vector with length equal to segment length
+            // Multiply length by pressure
+            p1.x = p1.x + d.y * p;
+            p1.y = p1.y - d.x * p;
+            p2.x = p2.x + d.y * p;
+            p2.y = p2.y - d.x * p;
+        }
+    }
+
+    var Graph = function() {
+        this.edges = [];
+        this.cells = [];
+
+        // Forcing ellipse, proportional to scene size (width)
+        var ellipseSize = new Size(
+            unitLength * 2.0 * 1.61803398875,
+            unitLength * 2.0
+        );
+        this.ellipse = new Path.Ellipse(new Rectangle(
+            view.center - ellipseSize/2, ellipseSize
+        ));
+        this.ellipse.strokeColor = new Color(0, 0.4);
+
+        this.k = 0.5;
+        this.pressureK = 0.05;
+        this.tensionK = 0.8;
+        this.surfaceTensionK = 0.9;
+        this.ellipseK = 0.01;
+        this.kRate = 0.996;
+    }
+
+    Graph.prototype.edge = function( a, b ) {
+        // Search for an existing edge, in either direction
+        for (var i = 0; i < this.edges.length; i++) {
+            if (this.edges[i].a === a && this.edges[i].b === b) {
+                return [this.edges[i], false];
+            }
+            if (this.edges[i].a === b && this.edges[i].b === a) {
+                return [this.edges[i], true];
+            }
+        }
+
+        var e = new Edge(a, b);
+        this.edges.push(e);
+        return [e, false];
+    }
+
+    Graph.prototype.update = function() {
+        for (var i = 0; i < this.edges.length; i++) {
+            this.edges[i].update();
+        }
+        for (var i = 0; i < this.cells.length; i++) {
+            this.cells[i].update();
+        }
+    }
+
+    var Cell = function( clockwisePoints ) {
+        this.edges = []
+        var prev = clockwisePoints[clockwisePoints.length - 1];
+        for (var i = 0; i < clockwisePoints.length; i++) {
+            var p = clockwisePoints[i];
+            var e = graph.edge(prev, p);
+            e[0].cells.push(this);
+            this.edges.push(e);
+            prev = p;
+        }
+
+        this.points = []
+        for (var i = 0; i < this.edges.length; i++) {
+            var edge = this.edges[i][0];
+            var reverseDirection = this.edges[i][1];
+            var points = edge.points.slice(0);
+            if (reverseDirection) {
+                points.reverse();
+            }
+            this.points = this.points.concat(points);
+        }
+
+        this.path = new Path(this.points);
+        this.restArea = this.path.area;
+        this.path.strokeColor = new Color(0, 0.5);
+        this.path.fillColor = new Color(0, 0.04);
+
+        graph.cells.push(this);
+        this.update();
+    }
+
+    Cell.prototype.update = function() {
+        this.path.segments = this.points;
+        this.pressure = this.restArea / this.path.area;
+
+        for (var i = 0; i < this.edges.length; i++) {
+            var edge = this.edges[i][0];
+            var reverseDirection = this.edges[i][1];
+            edge.applyPressure(reverseDirection ? -this.pressure : this.pressure);
+        }
+    }
+
+    var TriangleGrid = function( a, b, c ) {
+        // Regular triangular grid, starting with a seed triangle.
+        // Points are measured in a coordinate system that uses the AB and AC
+        // vectors as its two axes.
+
+        this.a = a;
+        this.ab = b - a;
+        this.ac = c - a;
+
+        // Points stored in our basis coordinate system
+        this.triangles = []
+        this.add( 0,0, 1,0, 0,1 );
+
+        // Points in the regular coordinate system
+        this.points = [
+            [ 0, 0, a ],
+            [ 1, 0, b ],
+            [ 0, 1, c ],
+        ];
+    }
+
+    TriangleGrid.prototype.add = function ( ab0, ac0, ab1, ac1, ab2, ac2 ) {
+        // Add an arbitrary triangle to the list
+        this.triangles.push([
+            new Point( ab0, ac0 ),
+            new Point( ab1, ac1 ),
+            new Point( ab2, ac2 )
+        ]);
+    }
+
+    TriangleGrid.prototype.hexagon = function( ab, ac ) {
+        // Add a hexagon, given the center point
+
+        this.add( ab+0, ac-1, ab+1, ac-1, ab+0, ac+0 );
+        this.add( ab+0, ac+0, ab+1, ac-1, ab+1, ac+0 );
+        this.add( ab+0, ac+0, ab+1, ac+0, ab+0, ac+1 );
+        this.add( ab-1, ac+0, ab+0, ac-1, ab+0, ac+0 );
+        this.add( ab-1, ac+0, ab+0, ac+0, ab-1, ac+1 );
+        this.add( ab-1, ac+1, ab+0, ac+0, ab+0, ac+1 );
+    };
+
+    TriangleGrid.prototype.point = function( c ) {
+        for (var i = 0; i < this.points.length; i++) {
+            if (this.points[i][0] == c.x && this.points[i][1] == c.y) {
+                return this.points[i][2];
+            }
+        }
+        var p = this.a + this.ab * c.x + this.ac * c.y;
+        this.points.push([ c.x, c.y, p ]);
+        return p;
+    }
+
+    TriangleGrid.prototype.makeCells = function() {
+        // Create a cell for each triangle
+        for (var i = 0; i < this.triangles.length; i++) {
+            var tri = this.triangles[i];
+            new Cell([
+                this.point( tri[0] ),
+                this.point( tri[1] ),
+                this.point( tri[2] )
+            ]);
+        }
+    }
+
+    TriangleGrid.prototype.subdivide = function() {
+        // Replace each triangle with its four subdivided triangles
+        newTriangles = []
+        for (var i = 0; i < this.triangles.length; i++) {
+            var a = this.triangles[i][0];
+            var b = this.triangles[i][1];
+            var c = this.triangles[i][2];
+
+            // Midpoints
+            var ab = (a + b) / 2;
+            var bc = (b + c) / 2;
+            var ca = (c + a) / 2;
+
+            newTriangles.push([ a, ab, ca ]);
+            newTriangles.push([ ab, b, bc ]);
+            newTriangles.push([ bc, ca, ab ]);
+            newTriangles.push([ ca, bc, c ]);
+        }
+        this.triangles = newTriangles
+    }
+
+    TriangleGrid.prototype.exclude = function( ab, bc ) {
+        // Remove any triangle that references the indicated point
+        newTriangles = []
+        for (var i = 0; i < this.triangles.length; i++) {
+            var a = this.triangles[i][0];
+            var b = this.triangles[i][1];
+            var c = this.triangles[i][2];
+
+            if (a.x == ab && a.y == bc) continue;
+            if (b.x == ab && b.y == bc) continue;
+            if (c.x == ab && c.y == bc) continue;
+
+            newTriangles.push([ a, b, c ]);
+        }
+        this.triangles = newTriangles
+    }
+
+    var encoder = new GIFEncoder();
+    encoder.setRepeat(0);
+    encoder.setDelay(1);
+    encoder.setSize(view.element.width, view.element.height);
+    encoder.start();
+
+    var background = new Path.Rectangle(view.bounds);
+    background.fillColor = 'white';
+
+    var unitRadius = view.size.width * 0.14;
+    var grid = new TriangleGrid(
+        view.center + (new Point(unitRadius, 0)).rotate(240),
+        view.center + (new Point(unitRadius, 0)).rotate(0),
+        view.center + (new Point(unitRadius, 0)).rotate(120)
+    );
+    var unitLength = grid.ab.length;
+    var graph = new Graph;
+
+    grid.hexagon( -1, 1 );
+    grid.hexagon( 1, -1 );
+    grid.hexagon( 1, 1 );
+
+    grid.subdivide();
+    grid.exclude(-1, 1);
+
+    grid.subdivide();
+    // grid.subdivide();
+
+    grid.makeCells();
+
+    var stepCounter = new PointText({
+        point: [ 10, 20 ],
+        fillColor: new Color(0, 0.25),
+        fontSize: 15
+    });
+    var stepNumber = 0;
+
+    var animationStepCount = 10000;
+    var stepsPerFrame = 20;
+
+    function onFrame(event) {
+        encoder.addFrame(view._context);
+
+        if (stepNumber == animationStepCount) {
+            // Finish
+            encoder.finish();
+            document.getElementById('image').src = 'data:image/gif;base64,' + encode64(encoder.stream().getData());
+            stepNumber++;
+
+        } else if (stepNumber < animationStepCount) {
+
+            for (var i = 0; i < stepsPerFrame; i++) {
+                graph.update();
+                graph.k *= graph.kRate;
+                stepNumber++;
+            }
+            stepCounter.content = "#" + stepNumber + " k=" + graph.k.toFixed(3);
+        }
+    }
+
+</script>
+</head>
+<body>
+    <img id='image' />
+    <canvas id="bitmap" width="800" height="600"></canvas>
+</body>
+</html>
