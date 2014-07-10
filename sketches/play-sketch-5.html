@@ -10,7 +10,7 @@ var Graph = function() {
     // Limits
     this.maxTriangles = 500;
     this.maxEdges = this.maxTriangles * 3;
-    this.pointsPerEdge = 5;
+    this.pointsPerEdge = 10;
     this.pointsPerTriangle = this.pointsPerEdge * 3;
     this.maxPoints = this.maxEdges * this.pointsPerEdge;
 
@@ -207,7 +207,7 @@ Graph.prototype.triangleArea = function( tri ) {
 
 Graph.prototype.pointInsideTriangle = function( tri, pointX, pointY ) {
     // Approximate the distance by which point 'p' is inside triangle 'tri'.
-    // Assumes triangle is convex, which hopefully will be close enough.
+    // Assumes triangle is convex.
     // If outside, returns 0.
 
     var begin = tri * this.pointsPerTriangle;
@@ -329,11 +329,11 @@ Graph.prototype.collideSurfaceTriangles = function( triList, k ) {
 
     for (var tri1 = 0; tri1 < triList.length; tri1++) {
         for (var tri2 = 0; tri2 < triList.length; tri2++) {
-            if (tri1 == tri2) {
-                continue;
-            }
             var t1 = triList[tri1];
             var t2 = triList[tri2];
+            if (t1 == t2) {
+                continue;
+            }
 
             // Apply pressure to points in tri1 if they're inside tri2
 
@@ -344,9 +344,7 @@ Graph.prototype.collideSurfaceTriangles = function( triList, k ) {
 
                 var pX = this.pointX[p];
                 var pY = this.pointY[p];
-                var depth = this.pointInsideTriangle( t2, [pX, pY] );
-
-console.log(depth);
+                var depth = this.pointInsideTriangle( t2, pX, pY );
 
                 if (depth > 0) {
 
@@ -361,7 +359,7 @@ console.log(depth);
                     // the effects of pressure bending the triangle's walls.
 
                     var a = this.trianglePointIDs[ t2                          ];
-                    var b = this.trianglePointIDs[ t2 + this.pointsPerEdge * 1 ];
+                    var b = this.trianglePointIDs[ t2 + this.pointsPerEdge     ];
                     var c = this.trianglePointIDs[ t2 + this.pointsPerEdge * 2 ];
 
                     var cX = (this.pointX[a] + this.pointX[b] + this.pointX[c]) / 3;
@@ -371,11 +369,10 @@ console.log(depth);
                     var cvX = cX - pX;
                     var cvY = cY - pY;
                     var cvScale = depth * k / Math.sqrt(cvX*cvX + cvY*cvY);
-                    console.log(depth, cvX, cvY, cvScale, p);
 
                     // Apply scaled pressure
-                    this.pointX[p] += cvX * cvScale;
-                    this.pointY[p] += cvY * cvScale;
+                    this.pointX[p] -= cvX * cvScale;
+                    this.pointY[p] -= cvY * cvScale;
                 }
             }
         }
@@ -538,29 +535,27 @@ function simulation() {
     grid.hexagon( 1, -1 );
     grid.hexagon( 1, 1 );
 
-    // grid.exclude( -2, 1 );
-
     grid.subdivide();
-    grid.exclude(-1, 1);
+    grid.exclude( -1, 1 );
 
-    grid.subdivide();
+    // grid.subdivide();
     grid.makeGraph();
 
     var surfaceTriangles = grid.graph.findSurfaceTriangles();
 
-    var stepNumber = 0;
-    var stepsPerFrame = 100;
-
     // Overall simulation timestep size. Larger values run faster but have more
     // error. If the whole shape "drifts" or the vertices appear kinked, decrease K.
-    var k = 0.1;
+    var k = 0.01;
 
-    var pressureK = 0.3;
-    var tensionK = 0.9;
+    var pressureK = 0.4;
+    var tensionK = 0.8;
     var surfaceTensionK = 0.0;
-    var surfaceAttractK = 0.05;
-    var collisionK = 1.0;
+    var surfaceAttractK = 0.02;
+    var collisionK = 4.0;
     var kRate = 1.0;
+
+    var stepsPerFrame = 10;
+    var stepNumber = 0;
 
     function nearestSurfacePoint(x, y)
     {
@@ -607,7 +602,7 @@ function simulation() {
         }
 
         // Surface-surface collisions
-        // grid.graph.collideSurfaceTriangles( surfaceTriangles, k * collisionK );
+        grid.graph.collideSurfaceTriangles( surfaceTriangles, k * collisionK );
 
         stepNumber++;
         k *= kRate;        
