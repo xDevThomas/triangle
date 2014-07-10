@@ -24,6 +24,7 @@
 #include <math.h>
 #include <algorithm>
 #include "OctoWS2811z.h"
+#include "pattern.h"
 #include "arm_math.h"
 #include "fc_usb.h"
 #include "fc_defs.h"
@@ -48,49 +49,73 @@ static residual_t residual[CHANNELS_TOTAL];
 // Reserved RAM area for signalling entry to bootloader
 extern uint32_t boot_token;
 
+// Built-in pattern, run during reserved mode
+static fcPattern pattern;
+
 /*
  * Low-level drawing code, which we want to compile in the same unit as the main loop.
  * We compile this multiple times, with different config flags.
  */
 
-#define FCP_INTERPOLATION   0
-#define FCP_DITHERING       0
-#define FCP_FN(name)        name##_I0_D0
+#define FCP_INTERPOLATION       0
+#define FCP_DITHERING           0
+#define FCP_DRAW_LEDS_PER_STRIP 64
+#define FCP_FN(name)            name##_I0_D0
 #include "fc_pixel_lut.cpp"
 #include "fc_pixel.cpp"
 #include "fc_draw.cpp"
 #undef FCP_INTERPOLATION
 #undef FCP_DITHERING
+#undef FCP_DRAW_LEDS_PER_STRIP
 #undef FCP_FN
 
-#define FCP_INTERPOLATION   1
-#define FCP_DITHERING       0
-#define FCP_FN(name)        name##_I1_D0
+#define FCP_INTERPOLATION       1
+#define FCP_DITHERING           0
+#define FCP_DRAW_LEDS_PER_STRIP 64
+#define FCP_FN(name)            name##_I1_D0
 #include "fc_pixel_lut.cpp"
 #include "fc_pixel.cpp"
 #include "fc_draw.cpp"
 #undef FCP_INTERPOLATION
 #undef FCP_DITHERING
+#undef FCP_DRAW_LEDS_PER_STRIP
 #undef FCP_FN
 
-#define FCP_INTERPOLATION   0
-#define FCP_DITHERING       1
-#define FCP_FN(name)        name##_I0_D1
+#define FCP_INTERPOLATION       0
+#define FCP_DITHERING           1
+#define FCP_DRAW_LEDS_PER_STRIP 64
+#define FCP_FN(name)            name##_I0_D1
 #include "fc_pixel_lut.cpp"
 #include "fc_pixel.cpp"
 #include "fc_draw.cpp"
 #undef FCP_INTERPOLATION
 #undef FCP_DITHERING
+#undef FCP_DRAW_LEDS_PER_STRIP
 #undef FCP_FN
 
-#define FCP_INTERPOLATION   1
-#define FCP_DITHERING       1
-#define FCP_FN(name)        name##_I1_D1
+#define FCP_INTERPOLATION       1
+#define FCP_DITHERING           1
+#define FCP_DRAW_LEDS_PER_STRIP 64
+#define FCP_FN(name)            name##_I1_D1
 #include "fc_pixel_lut.cpp"
 #include "fc_pixel.cpp"
 #include "fc_draw.cpp"
 #undef FCP_INTERPOLATION
 #undef FCP_DITHERING
+#undef FCP_DRAW_LEDS_PER_STRIP
+#undef FCP_FN
+
+// To save enough CPU to run out pattern, operate on even shorter strips
+#define FCP_INTERPOLATION       1
+#define FCP_DITHERING           1
+#define FCP_DRAW_LEDS_PER_STRIP 16
+#define FCP_FN(name)            name##_I1_D1_Short
+#include "fc_pixel_lut.cpp"
+#include "fc_pixel.cpp"
+#include "fc_draw.cpp"
+#undef FCP_INTERPOLATION
+#undef FCP_DITHERING
+#undef FCP_DRAW_LEDS_PER_STRIP
 #undef FCP_FN
 
 
@@ -149,14 +174,18 @@ extern "C" int main()
 
     // Announce firmware version
     serial_begin(BAUD2DIV(115200));
-    serial_print("Fadecandy v" DEVICE_VER_STRING "\r\n");
+    serial_print("Triangle Attractor (c) 2014 Micah Elizabeth Scott\r\n");
+
+    // Start out in our special operation mode, running the attractor pattern
+    buffers.flags = CFLAG_RESERVED_MODE;
+    pattern.init(buffers);
 
     // Application main loop
     while (usb_dfu_state == DFU_appIDLE) {
         watchdog_refresh();
 
         // Select a different drawing loop based on our firmware config flags
-        switch (buffers.flags & (CFLAG_NO_INTERPOLATION | CFLAG_NO_DITHERING)) {
+        switch (buffers.flags & (CFLAG_RESERVED_MODE | CFLAG_NO_INTERPOLATION | CFLAG_NO_DITHERING)) {
             case 0:
             default:
                 updateDrawBuffer_I1_D1(calculateInterpCoefficient());
@@ -169,6 +198,10 @@ extern "C" int main()
                 break;
             case CFLAG_NO_INTERPOLATION | CFLAG_NO_DITHERING:
                 updateDrawBuffer_I0_D0(0x10000);
+                break;
+            case CFLAG_RESERVED_MODE:
+                pattern.update(buffers);
+                updateDrawBuffer_I1_D1_Short(0x10000);
                 break;
         }
 

@@ -27,7 +27,8 @@ C_FILES = \
 CPP_FILES = \
 	fadecandy.cpp \
 	fc_usb.cpp \
-	OctoWS2811z.cpp
+	OctoWS2811z.cpp \
+	pattern_data.cpp
 
 # Headers
 INCLUDES = -I.

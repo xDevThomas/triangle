@@ -98,6 +98,7 @@ struct fcColorLUT : public fcPacketBuffer<PACKETS_PER_LUT>
 #define CFLAG_NO_INTERPOLATION  (1 << 1)
 #define CFLAG_NO_ACTIVITY_LED   (1 << 2)
 #define CFLAG_LED_CONTROL       (1 << 3)
+#define CFLAG_RESERVED_MODE     (1 << 4)
 
 /*
  * Data type for current color LUT

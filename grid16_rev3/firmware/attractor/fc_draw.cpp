@@ -58,7 +58,7 @@ static void FCP_FN(updateDrawBuffer)(unsigned interpCoefficient)
 
     residual_t *pResidual = residual;
 
-    for (int i = 0; i < LEDS_PER_STRIP; ++i, pResidual += 3) {
+    for (int i = 0; i < FCP_DRAW_LEDS_PER_STRIP; ++i, pResidual += 3) {
 
         // Six output words
         union {
