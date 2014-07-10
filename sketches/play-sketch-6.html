@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script type="text/javascript" src="lib/jsgif/b64.js"></script>
+<script type="text/javascript" src="lib/jsgif/LZWEncoder.js"></script>
+<script type="text/javascript" src="lib/jsgif/NeuQuant.js"></script>
+<script type="text/javascript" src="lib/jsgif/GIFEncoder.js"></script>
+<script type="text/javascript">
+
+// Design sketch for "Play" project.
+// (C) Micah Elizabeth Scott 2014
+
+var Graph = function() {
+    // Limits
+    this.maxTriangles = 5000;
+    this.maxEdges = this.maxTriangles * 3;
+    this.pointsPerEdge = 10;
+    this.pointsPerTriangle = this.pointsPerEdge * 3;
+    this.maxPoints = this.maxEdges * this.pointsPerEdge;
+
+    // Map Point ID -> (x, y, type)
+    this.numPoints = 0
+    this.pointX = new Float64Array(this.maxPoints);
+    this.pointY = new Float64Array(this.maxPoints);
+    this.pointType = new Uint8Array(this.maxPoints);
+
+    // Map Edge ID -> Fixed-size list of Point IDs
+    this.numEdges = 0
+    this.edgePointIDs = new Uint32Array(this.maxPoints);
+
+    // Edge ID -> Number of cells referencing this edge
+    this.edgeCellCounts = new Uint8Array(this.maxEdges);
+
+    // Triangle ID -> Three edges, clockwise order. High bit reverses order.
+    this.numTriangles = 0
+    this.triangleEdgeIDs = new Uint32Array(this.maxEdges);
+
+    // Triangle ID -> Fixed size list of Point IDs
+    this.trianglePointIDs = new Uint32Array(this.maxPoints);
+
+    // Triangle ID -> Resting area
+    this.triangleRestingArea = new Float64Array(this.maxTriangles);
+}
+
+Graph.prototype.triangleCanvasPath = function( ctx, tri ) {
+    ctx.beginPath();
+    var begin = tri * this.pointsPerTriangle;
+    var end = (tri + 1) * this.pointsPerTriangle;
+    for (var i = begin; i < end; i++) {
+        var p = this.trianglePointIDs[i];
+        ctx.lineTo(this.pointX[p], this.pointY[p]);
+    }
+    ctx.closePath();
+}
+
+Graph.prototype.edgeCanvasPath = function( ctx, edge ) {
+    ctx.beginPath();
+    var begin = edge * this.pointsPerEdge;
+    var end = (edge + 1) * this.pointsPerEdge;
+    for (var i = begin; i < end; i++) {
+        var p = this.edgePointIDs[i];
+        ctx.lineTo(this.pointX[p], this.pointY[p]);
+    }
+}
+
+Graph.prototype.draw = function( ctx ) {
+    // Triangle filling
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    for (var tri = 0; tri < this.numTriangles; tri++) {
+        this.triangleCanvasPath(ctx, tri);
+        ctx.fill();
+    }
+
+    // Triangle mesh
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    for (var edge = 0; edge < this.numEdges; edge++) {
+        this.edgeCanvasPath(ctx, edge);
+        ctx.stroke();
+    }
+
+    // Vertices
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    for (var p = 0; p < this.numPoints; p++) {
+        if (this.pointType[p] == 0) {
+            ctx.beginPath();
+            ctx.arc(this.pointX[p], this.pointY[p], 2, 0, Math.PI*2);
+            ctx.fill();
+        }
+    }
+}
+
+Graph.prototype.addPoint = function( x, y, type ) {
+    var n = this.numPoints++;
+    this.pointX[n] = x; 
+    this.pointY[n] = y;
+    this.pointType[n] = type || 0;
+    return n;
+}
+
+Graph.prototype.addEdge = function( a, b ) {
+    // Add an edge between two points, with interpolated midpoints.
+
+    var n = this.numEdges++;
+
+    for (var i = 0; i < this.pointsPerEdge; i++) {
+        var p;
+
+        if (i == 0) {
+            // First point
+            p = a;
+        } else if (i == this.pointsPerEdge - 1) {
+            // Last point
+            p = b;
+        } else {
+            // New midpoint; If the edge is unique, this midpoint will be too.
+            var t = i / (this.pointsPerEdge - 1);
+            p = this.addPoint(
+                this.pointX[a] + (this.pointX[b] - this.pointX[a]) * t,
+                this.pointY[a] + (this.pointY[b] - this.pointY[a]) * t,
+                1
+            );
+        }
+
+        this.edgePointIDs[n * this.pointsPerEdge + i] = p;
+    }
+    return n;
+}
+
+Graph.prototype.edge = function( a, b ) {
+    // Search for an existing edge, in either direction. Returns an edge ID,
+    // with high bit indicating order.
+
+    for (var n = 0; n < this.numEdges; n++) {
+        var edgeA = this.edgePointIDs[n * this.pointsPerEdge];
+        var edgeB = this.edgePointIDs[(n + 1) * this.pointsPerEdge - 1];
+        if (edgeA == a && edgeB == b) {
+            return n;
+        }
+        if (edgeA == b && edgeB == a) {
+            return n | 0x80000000;
+        }
+    }
+    return this.addEdge(a, b);
+}
+
+Graph.prototype.isSurface = function( edge ) {
+    return this.edgeCellCounts[edge & 0x7FFFFFFF] == 1;
+}
+
+Graph.prototype.addTriangle = function( a, b, c ) {
+    // Add a triangle between points, creating edges as necessary.
+
+    var tri = this.numTriangles++;
+
+    var ab = this.edge(a, b);
+    var bc = this.edge(b, c);
+    var ca = this.edge(c, a);
+
+    this.triangleEdgeIDs[tri*3    ] = ab;
+    this.triangleEdgeIDs[tri*3 + 1] = bc;
+    this.triangleEdgeIDs[tri*3 + 2] = ca;
+
+    this.edgeCellCounts[ab & 0x7FFFFFFF] += 1;
+    this.edgeCellCounts[bc & 0x7FFFFFFF] += 1;
+    this.edgeCellCounts[ca & 0x7FFFFFFF] += 1;
+
+    // Walk edges to create trianglePointIDs array.
+    // This is redundant information, but precalculated for speed.
+    for (var edge = 0; edge < 3; edge++) {
+        var edgeID = this.triangleEdgeIDs[tri * 3 + edge];
+        var dest = (tri * 3 + edge) * this.pointsPerEdge;
+
+        if (edgeID & 0x80000000) {
+            // Reverse
+
+            edgeID &= 0x7FFFFFFF;
+            for (var n = this.pointsPerEdge - 1; n >= 0; n--) {
+                var p = this.edgePointIDs[n + this.pointsPerEdge * edgeID];
+                this.trianglePointIDs[dest++] = p;
+            }
+
+        } else {
+            for (var n = 0; n < this.pointsPerEdge; n++) {
+                var p = this.edgePointIDs[n + this.pointsPerEdge * edgeID];
+                this.trianglePointIDs[dest++] = p;
+            }
+        }
+    }
+
+    // Now we can calculate area at rest
+    this.triangleRestingArea[tri] = this.triangleArea(tri);
+
+    return tri;
+};
+
+Graph.prototype.triangleArea = function( tri ) {
+    var begin = tri * this.pointsPerTriangle;
+    var end = (tri + 1) * this.pointsPerTriangle;
+    var prev = end - 1; // Loop around
+    var area = 0;
+
+    for (var i = begin; i < end; i++) {
+        var pI = this.trianglePointIDs[i];
+        var pJ = this.trianglePointIDs[prev];
+        area += (this.pointX[pJ] + this.pointX[pI]) * (this.pointY[pJ] - this.pointY[pI]);
+        prev = i;
+    }
+
+    return area/2;
+}
+
+
+Graph.prototype.pointInsideTriangle = function( tri, pointX, pointY ) {
+    // Approximate the distance by which point 'p' is inside triangle 'tri'.
+    // Assumes the triangle is convex or nearly convex.
+    // If outside, returns 0.
+
+    var begin = tri * this.pointsPerTriangle;
+    var end = (tri + 1) * this.pointsPerTriangle;
+    var prev = end - 1; // Loop around
+    var result = null;
+
+    for (var i = begin; i < end; i++) {
+        var pI = this.trianglePointIDs[i];
+        var pJ = this.trianglePointIDs[prev];
+
+        var x0 = this.pointX[pJ];
+        var y0 = this.pointY[pJ];
+
+        var xD = this.pointX[pI] - x0;
+        var yD = this.pointY[pI] - y0;
+
+        var xP = pointX - x0;
+        var yP = pointY - y0;
+
+        if (xD != 0 || yD != 0) {
+            var dist;
+
+            if (xD == 0) {
+                dist = xP;
+            } else if (yD == 0) {
+                dist = -yP;
+            } else {
+                dist = (xP * yD/xD - yP) * xD / Math.sqrt(xD*xD + yD*yD);
+            }
+
+            if (dist <= 0) {
+                // Outside
+                return 0;
+            }
+
+            if (dist > 8.0) {
+                // Assume false positive due to concavity
+                continue;
+            }
+
+            // Overall result is the distance to the closest segment
+            result = Math.min(result || dist, dist);
+        }
+
+        prev = i;
+    }
+    return result;
+}
+
+Graph.prototype.trianglePressure = function( tri ) {
+    return this.triangleRestingArea[tri] / this.triangleArea(tri);
+}
+
+Graph.prototype.applyPressureAlongEdge = function( edgeN, p ) {
+    // Apply pressure uniformly along the whole edge
+
+    if (edgeN & 0x80000000) {
+        // Reverse
+        edgeN &= 0x7FFFFFFF;
+        p = -p;
+    }
+
+    for (var i = 1; i < this.pointsPerEdge; i++) {
+        var p1 = this.edgePointIDs[edgeN * this.pointsPerEdge + i - 1];
+        var p2 = this.edgePointIDs[edgeN * this.pointsPerEdge + i];
+
+        var dx = this.pointX[p2] - this.pointX[p1];
+        var dy = this.pointY[p2] - this.pointY[p1];
+
+        // Normal vector with length equal to segment length
+        // Multiply length by pressure
+        this.pointX[p1] += dy * p;
+        this.pointY[p1] -= dx * p;
+        this.pointX[p2] += dy * p;
+        this.pointY[p2] -= dx * p;
+    }
+}
+
+Graph.prototype.applyPressureInTriangle = function( triN, p ) {
+    for (var edge = 0; edge < 3; edge++) {
+        this.applyPressureAlongEdge(this.triangleEdgeIDs[triN*3 + edge], p);
+    }
+}
+
+Graph.prototype.contractEdge = function( edgeN, k ) {
+    edgeN &= 0x7FFFFFFF;
+    for (var i = 1; i < this.pointsPerEdge; i++) {
+        var p1 = this.edgePointIDs[edgeN * this.pointsPerEdge + i - 1];
+        var p2 = this.edgePointIDs[edgeN * this.pointsPerEdge + i];
+
+        var dx = this.pointX[p2] - this.pointX[p1];
+        var dy = this.pointY[p2] - this.pointY[p1];
+
+        // Normal vector with length equal to segment length
+        // Multiply length by pressure
+        this.pointX[p1] += dx * k;
+        this.pointY[p1] += dy * k;
+        this.pointX[p2] -= dx * k;
+        this.pointY[p2] -= dy * k;
+    }
+}
+
+Graph.prototype.findSurfaceTriangles = function() {
+    // Find triangles that have at least one edge without neighbors.
+
+    var l = [];
+
+    for (var tri = 0; tri < this.numTriangles; tri++) {
+        for (var edge = 0; edge < 3; edge++) {
+            var edgeID = this.triangleEdgeIDs[tri*3 + edge];
+            if (this.isSurface(edgeID)) {
+                l.push(tri);
+                continue;
+            }
+        }
+    }
+
+    return l;
+}
+
+Graph.prototype.collideSurfaceTriangles = function( triList, k ) {
+    // React to collisions between surface triangles as listed.
+
+    for (var tri1 = 0; tri1 < triList.length; tri1++) {
+        for (var tri2 = 0; tri2 < triList.length; tri2++) {
+            var t1 = triList[tri1];
+            var t2 = triList[tri2];
+            if (t1 == t2) {
+                continue;
+            }
+
+            // Apply pressure to points in tri1 if they're inside tri2
+
+            var begin = t1 * this.pointsPerTriangle;
+            var end = (t1 + 1) * this.pointsPerTriangle;
+            for (var i = begin; i < end; i++) {
+                var p = this.trianglePointIDs[i];
+
+                var pX = this.pointX[p];
+                var pY = this.pointY[p];
+                var depth = this.pointInsideTriangle( t2, pX, pY );
+
+                if (depth > 0) {
+
+                    // The point 'p' is buried inside triangle 2 by 'depth' units.
+                    //
+                    // Apply a force to get it out. This force ends up being symmetric,
+                    // since we run this loop over the full matrix of triangles that might
+                    // be colliding.
+                    //
+                    // We direct the force in toward the approximate center of triangle 1.
+                    // This approximation is the mean of the three vertex points, not counting
+                    // the effects of pressure bending the triangle's walls.
+
+                    var a = this.trianglePointIDs[ t2                          ];
+                    var b = this.trianglePointIDs[ t2 + this.pointsPerEdge     ];
+                    var c = this.trianglePointIDs[ t2 + this.pointsPerEdge * 2 ];
+
+                    var cX = (this.pointX[a] + this.pointX[b] + this.pointX[c]) / 3;
+                    var cY = (this.pointY[a] + this.pointY[b] + this.pointY[c]) / 3;
+
+                    // Normalized vector from pXY to cXY
+                    var cvX = cX - pX;
+                    var cvY = cY - pY;
+                    var cvScale = depth * k / Math.sqrt(cvX*cvX + cvY*cvY);
+
+                    // Apply scaled pressure
+                    this.pointX[p] -= cvX * cvScale;
+                    this.pointY[p] -= cvY * cvScale;
+                }
+            }
+        }
+    }
+}
+
+var TriangleGrid = function( a, b, c ) {
+    // Regular triangular grid, starting with a seed triangle.
+    // Points are measured in a coordinate system that uses the AB and AC
+    // vectors as its two axes.
+
+    this.graph = new Graph();
+
+    this.a = a;
+    this.ab = [b[0] - a[0], b[1] - a[1]];
+    this.ac = [c[0] - a[0], c[1] - a[1]];
+
+    // Points stored in our basis coordinate system
+    this.triangles = []
+    this.add( 0,0, 1,0, 0,1 );
+
+    // Cached points
+    this.points = [
+        [ 0, 0, this.graph.addPoint(a[0], a[1]) ],
+        [ 1, 0, this.graph.addPoint(b[0], b[1]) ],
+        [ 0, 1, this.graph.addPoint(c[0], c[1]) ],
+    ];
+}
+
+TriangleGrid.prototype.add = function ( ab0, ac0, ab1, ac1, ab2, ac2 ) {
+    // Add an arbitrary triangle to the list
+    this.triangles.push([ ab0, ac0, ab1, ac1, ab2, ac2 ]);
+}
+
+TriangleGrid.prototype.hexagon = function( ab, ac ) {
+    // Add a hexagon, given the center point
+
+    this.add( ab+0, ac-1, ab+1, ac-1, ab+0, ac+0 );
+    this.add( ab+0, ac+0, ab+1, ac-1, ab+1, ac+0 );
+    this.add( ab+0, ac+0, ab+1, ac+0, ab+0, ac+1 );
+    this.add( ab-1, ac+0, ab+0, ac-1, ab+0, ac+0 );
+    this.add( ab-1, ac+0, ab+0, ac+0, ab-1, ac+1 );
+    this.add( ab-1, ac+1, ab+0, ac+0, ab+0, ac+1 );
+};
+
+TriangleGrid.prototype.point = function( c ) {
+    // Search cache
+    for (var i = 0; i < this.points.length; i++) {
+        if (this.points[i][0] == c[0] && this.points[i][1] == c[1]) {
+            return this.points[i][2];
+        }
+    }
+
+    // Convert triangle coordinates to pixel coordinates
+    var p = this.graph.addPoint(
+        this.a[0] + this.ab[0] * c[0] + this.ac[0] * c[1],
+        this.a[1] + this.ab[1] * c[0] + this.ac[1] * c[1]
+    );
+
+    this.points.push([ c[0], c[1], p ]);
+    return p;
+}
+
+TriangleGrid.prototype.makeGraph = function() {
+    // Create a graph cell for each triangle
+    for (var i = 0; i < this.triangles.length; i++) {
+        var t = this.triangles[i];
+        var aX = t[0];
+        var aY = t[1];
+        var bX = t[2];
+        var bY = t[3];
+        var cX = t[4];
+        var cY = t[5];
+
+        this.graph.addTriangle(
+            this.point([ aX, aY ]),
+            this.point([ bX, bY ]),
+            this.point([ cX, cY ])
+        );
+    }
+}
+
+TriangleGrid.prototype.subdivide = function() {
+    // Replace each triangle with its four subdivided triangles
+    newTriangles = []
+    for (var i = 0; i < this.triangles.length; i++) {
+        var t = this.triangles[i];
+        var aX = t[0];
+        var aY = t[1];
+        var bX = t[2];
+        var bY = t[3];
+        var cX = t[4];
+        var cY = t[5];
+
+        // Midpoints
+        var abX = (aX + bX) / 2;
+        var abY = (aY + bY) / 2;
+        var bcX = (bX + cX) / 2;
+        var bcY = (bY + cY) / 2;
+        var caX = (cX + aX) / 2;
+        var caY = (cY + aY) / 2;
+
+        newTriangles.push([ aX, aY, abX, abY, caX, caY ]);
+        newTriangles.push([ abX, abY, bX, bY, bcX, bcY ]);
+        newTriangles.push([ bcX, bcY, caX, caY, abX, abY ]);
+        newTriangles.push([ caX, caY, bcX, bcY, cX, cY ]);
+    }
+    this.triangles = newTriangles
+}
+
+TriangleGrid.prototype.exclude = function( ab, bc ) {
+    // Remove any triangle that references the indicated point
+    newTriangles = []
+    for (var i = 0; i < this.triangles.length; i++) {
+        var t = this.triangles[i];
+        var aX = t[0];
+        var aY = t[1];
+        var bX = t[2];
+        var bY = t[3];
+        var cX = t[4];
+        var cY = t[5];
+
+        if (aX == ab && aY == bc) continue;
+        if (bX == ab && bY == bc) continue;
+        if (cX == ab && cY == bc) continue;
+
+        newTriangles.push(t);
+    }
+    this.triangles = newTriangles
+}
+
+TriangleGrid.prototype.draw = function( ctx ) {
+    this.graph.draw(ctx);
+}
+
+function simulation() {
+
+    var canvas = document.getElementById('bitmap');
+    canvas.width = 800;
+    canvas.height = 600;
+
+    var context = canvas.getContext('2d');
+    var mouse = [ 0, 0 ];
+    canvas.onmousemove = function (e) {
+        mouse[0] = e.pageX - this.offsetLeft;
+        mouse[1] = e.pageY - this.offsetTop;
+    }
+
+    var encoder = new GIFEncoder();
+    encoder.setRepeat(0);
+    encoder.setDelay(1);
+    encoder.setSize(canvas.width, canvas.height);
+    encoder.start();
+
+    var center = [canvas.width/2, canvas.height/2];
+    var unitRadius = canvas.width * 0.08;
+
+    var grid = new TriangleGrid(
+        [ canvas.width/2 - unitRadius * 0.5, canvas.height/2 + unitRadius * Math.sqrt(3)/2 ],
+        [ canvas.width/2 + unitRadius,       canvas.height/2 ],
+        [ canvas.width/2 - unitRadius * 0.5, canvas.height/2 - unitRadius * Math.sqrt(3)/2 ]
+    );
+    var unitLength = unitRadius * Math.sqrt(3);
+
+    // grid.hexagon( -1, 1 );
+    grid.hexagon( 1, -1 );
+    grid.hexagon( 1, 1 );
+
+    grid.subdivide();
+    grid.exclude( -1, 1 );
+    grid.subdivide();
+    grid.subdivide();
+    grid.makeGraph();
+
+    var surfaceTriangles = grid.graph.findSurfaceTriangles();
+
+    // Overall simulation timestep size. Larger values run faster but have more
+    // error. If the whole shape "drifts" or the vertices appear kinked, decrease K.
+    var k = 0.01;
+
+    var pressureK = 0.6;
+    var tensionK = 6.0;
+    var surfaceTensionK = 15.0;
+    var surfaceAttractK = 0.06;
+    var surfaceDeterrentK = 2000.0;
+    var collisionK = 0;
+    var kRate = 1.0;
+
+    var animationStepCount = null;
+    var stepsPerFrame = 100;
+    var stepNumber = 0;
+
+    var deterrentX = 510;
+    var deterrentY = 300;
+
+    function nearestSurfacePoint(x, y)
+    {
+        // Attract surface to an elliptical shape with an aspect ratio of phi
+        var phi = (1 + Math.sqrt(5))/2;
+        x -= center[0];
+        y -= center[1];
+        var l = Math.sqrt(x*x + y*y);
+        var r = unitRadius * 2;
+        return [center[0] + x/l * phi * r, center[1] + y/l * r];
+    }
+
+    function step()
+    {
+        // Per-edge forces
+        for (var edge = 0; edge < grid.graph.numEdges; edge++) {
+            if (grid.graph.isSurface(edge)) {
+
+                // Surface tension
+                grid.graph.contractEdge(edge, k * (tensionK + surfaceTensionK));
+
+                // Surface attraction
+                var begin = edge * grid.graph.pointsPerEdge;
+                var end = (edge + 1) * grid.graph.pointsPerEdge;
+                for (var i = begin; i < end; i++) {
+                    var p = grid.graph.edgePointIDs[i];
+                    var x = grid.graph.pointX[p];
+                    var y = grid.graph.pointY[p];
+                    var n = nearestSurfacePoint(x, y);
+                    grid.graph.pointX[p] = x + (n[0] - x) * k * surfaceAttractK;
+                    grid.graph.pointY[p] = y + (n[1] - y) * k * surfaceAttractK;
+                }
+
+                // Surface deterrent
+                var begin = edge * grid.graph.pointsPerEdge;
+                var end = (edge + 1) * grid.graph.pointsPerEdge;
+                for (var i = begin; i < end; i++) {
+                    var p = grid.graph.edgePointIDs[i];
+                    var x = grid.graph.pointX[p];
+                    var y = grid.graph.pointY[p];
+                    var dx = x - deterrentX;
+                    var dy = y - deterrentY;
+                    var scale = k * surfaceDeterrentK / (dx*dx + dy*dy);
+                    grid.graph.pointX[p] = x + dx * scale;
+                    grid.graph.pointY[p] = y + dy * scale;
+                }
+
+            } else {
+                // Internal tension
+                grid.graph.contractEdge(edge, k * tensionK);
+            }
+        }
+
+        // Per-triangle forces
+        for (var tri = 0; tri < grid.graph.numTriangles; tri++) {
+            var p = grid.graph.trianglePressure(tri);
+            grid.graph.applyPressureInTriangle(tri, -p * k * pressureK);
+        }
+
+        // Surface-surface collisions
+        if (collisionK > 0) {
+            grid.graph.collideSurfaceTriangles( surfaceTriangles, k * collisionK );
+        }
+
+        stepNumber++;
+        k *= kRate;        
+    }
+
+    function onFrame(event)
+    {
+        if (stepNumber == animationStepCount) {
+            // Finish
+            encoder.finish();
+            document.getElementById('image').src = 'data:image/gif;base64,' + encode64(encoder.stream().getData());
+            stepNumber++;
+
+        } else if (stepNumber < animationStepCount || !animationStepCount) {
+
+            for (var i = 0; i < stepsPerFrame; i++) {
+                step();
+            }
+
+            // Background
+            context.fillStyle = 'white';
+            context.fillRect(0, 0, canvas.width, canvas.height);
+
+            grid.draw(context);
+
+            if (animationStepCount) {
+                encoder.addFrame(context);
+            }
+
+            context.fillStyle = "black";
+            context.font = "18px Futura";
+            context.fillText("Triangle / Play", 10, 30);
+            context.font = "12px Futura";
+            context.fillText("Simulation step #" + stepNumber + " : " + 
+                grid.graph.numTriangles + " triangles, " + grid.graph.numPoints + " points", 10, 50);
+            context.fillText("Micah Elizabeth Scott / 2014", 10, canvas.height - 10);
+
+            context.beginPath();
+            context.fillStyle = 'rgba(0,0,0,0.08)';
+            context.arc(deterrentX, deterrentY, 2, 0, Math.PI*2);
+            context.fill();
+
+            window.requestAnimationFrame(onFrame);
+        }
+    }
+
+    window.requestAnimationFrame(onFrame);
+}
+
+</script>
+</head>
+<body onload='simulation()' >
+    <img id='image' />
+    <canvas id='bitmap'></canvas>
+</body>
+</html>
