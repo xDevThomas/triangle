@@ -10,10 +10,9 @@ var Graph = function() {
     // Limits
     this.maxTriangles = 500;
     this.maxEdges = this.maxTriangles * 3;
-    this.pointsPerEdge = 10;
+    this.pointsPerEdge = 5;
     this.pointsPerTriangle = this.pointsPerEdge * 3;
     this.maxPoints = this.maxEdges * this.pointsPerEdge;
-    this.intCoordinateScale = 512;
 
     // Map Point ID -> (x, y, type)
     this.numPoints = 0
@@ -206,7 +205,7 @@ Graph.prototype.triangleArea = function( tri ) {
     return area/2;
 }
 
-Graph.prototype.pointInsideTriangle = function( tri, p ) {
+Graph.prototype.pointInsideTriangle = function( tri, pointX, pointY ) {
     // Approximate the distance by which point 'p' is inside triangle 'tri'.
     // Assumes triangle is convex, which hopefully will be close enough.
     // If outside, returns 0.
@@ -226,8 +225,8 @@ Graph.prototype.pointInsideTriangle = function( tri, p ) {
         var xD = this.pointX[pI] - x0;
         var yD = this.pointY[pI] - y0;
 
-        var xP = p[0] - x0;
-        var yP = p[1] - y0;
+        var xP = pointX - x0;
+        var yP = pointY - y0;
 
         if (xD != 0 || yD != 0) {
             var dist;
@@ -327,6 +326,60 @@ Graph.prototype.findSurfaceTriangles = function() {
 
 Graph.prototype.collideSurfaceTriangles = function( triList, k ) {
     // React to collisions between surface triangles as listed.
+
+    for (var tri1 = 0; tri1 < triList.length; tri1++) {
+        for (var tri2 = 0; tri2 < triList.length; tri2++) {
+            if (tri1 == tri2) {
+                continue;
+            }
+            var t1 = triList[tri1];
+            var t2 = triList[tri2];
+
+            // Apply pressure to points in tri1 if they're inside tri2
+
+            var begin = t1 * this.pointsPerTriangle;
+            var end = (t1 + 1) * this.pointsPerTriangle;
+            for (var i = begin; i < end; i++) {
+                var p = this.trianglePointIDs[i];
+
+                var pX = this.pointX[p];
+                var pY = this.pointY[p];
+                var depth = this.pointInsideTriangle( t2, [pX, pY] );
+
+console.log(depth);
+
+                if (depth > 0) {
+
+                    // The point 'p' is buried inside triangle 2 by 'depth' units.
+                    //
+                    // Apply a force to get it out. This force ends up being symmetric,
+                    // since we run this loop over the full matrix of triangles that might
+                    // be colliding.
+                    //
+                    // We direct the force in toward the approximate center of triangle 1.
+                    // This approximation is the mean of the three vertex points, not counting
+                    // the effects of pressure bending the triangle's walls.
+
+                    var a = this.trianglePointIDs[ t2                          ];
+                    var b = this.trianglePointIDs[ t2 + this.pointsPerEdge * 1 ];
+                    var c = this.trianglePointIDs[ t2 + this.pointsPerEdge * 2 ];
+
+                    var cX = (this.pointX[a] + this.pointX[b] + this.pointX[c]) / 3;
+                    var cY = (this.pointY[a] + this.pointY[b] + this.pointY[c]) / 3;
+
+                    // Normalized vector from pXY to cXY
+                    var cvX = cX - pX;
+                    var cvY = cY - pY;
+                    var cvScale = depth * k / Math.sqrt(cvX*cvX + cvY*cvY);
+                    console.log(depth, cvX, cvY, cvScale, p);
+
+                    // Apply scaled pressure
+                    this.pointX[p] += cvX * cvScale;
+                    this.pointY[p] += cvY * cvScale;
+                }
+            }
+        }
+    }
 }
 
 var TriangleGrid = function( a, b, c ) {
@@ -481,11 +534,13 @@ function simulation() {
     );
     var unitLength = unitRadius * Math.sqrt(3);
 
-    // grid.hexagon( -1, 1 );
-    // grid.hexagon( 1, -1 );
-    // grid.hexagon( 1, 1 );
+    grid.hexagon( -1, 1 );
+    grid.hexagon( 1, -1 );
+    grid.hexagon( 1, 1 );
 
-    // grid.subdivide();
+    // grid.exclude( -2, 1 );
+
+    grid.subdivide();
     grid.exclude(-1, 1);
 
     grid.subdivide();
@@ -498,12 +553,12 @@ function simulation() {
 
     // Overall simulation timestep size. Larger values run faster but have more
     // error. If the whole shape "drifts" or the vertices appear kinked, decrease K.
-    var k = 0.01;
+    var k = 0.1;
 
-    var pressureK = 0.4;
-    var tensionK = 1.0;
-    var surfaceTensionK = 2.0;
-    var surfaceAttractK = 0.008;
+    var pressureK = 0.3;
+    var tensionK = 0.9;
+    var surfaceTensionK = 0.0;
+    var surfaceAttractK = 0.05;
     var collisionK = 1.0;
     var kRate = 1.0;
 
@@ -525,7 +580,7 @@ function simulation() {
             if (grid.graph.isSurface(edge)) {
 
                 // Surface tension
-                grid.graph.contractEdge(edge, k * surfaceTensionK);
+                grid.graph.contractEdge(edge, k * (tensionK + surfaceTensionK));
 
                 // Surface attraction
                 var begin = edge * grid.graph.pointsPerEdge;
@@ -552,7 +607,7 @@ function simulation() {
         }
 
         // Surface-surface collisions
-        grid.graph.collideSurfaceTriangles(surfaceTriangles, k * collisionK);
+        // grid.graph.collideSurfaceTriangles( surfaceTriangles, k * collisionK );
 
         stepNumber++;
         k *= kRate;        
@@ -566,13 +621,6 @@ function simulation() {
 
         // Background
         context.clearRect(0, 0, canvas.width, canvas.height);
-
-        var pt = grid.graph.pointInsideTriangle( 0, mouse );
-        if (pt > 0) {
-            context.beginPath();
-            context.arc(mouse[0], mouse[1], pt, 0, Math.PI*2);
-            context.stroke();
-        }         
 
         context.fillStyle = "black";
         context.font = "18px Futura";
