@@ -547,14 +547,14 @@ function simulation() {
     );
     var unitLength = unitRadius * Math.sqrt(3);
 
-    // grid.hexagon( -1, 1 );
-    grid.hexagon( 1, -1 );
-    grid.hexagon( 1, 1 );
+    grid.hexagon( -1, 1 );
+    // grid.hexagon( 1, -1 );
+    // grid.hexagon( 1, 1 );
 
     grid.subdivide();
     grid.exclude( -1, 1 );
     grid.subdivide();
-    grid.subdivide();
+    // grid.subdivide();
     grid.makeGraph();
 
     var surfaceTriangles = grid.graph.findSurfaceTriangles();
@@ -563,11 +563,11 @@ function simulation() {
     // error. If the whole shape "drifts" or the vertices appear kinked, decrease K.
     var k = 0.01;
 
-    var pressureK = 0.6;
+    var pressureK = 0.9;
     var tensionK = 6.0;
     var surfaceTensionK = 15.0;
     var surfaceAttractK = 0.06;
-    var surfaceDeterrentK = 2000.0;
+    var surfaceDeterrentK = 40.0;
     var collisionK = 0;
     var kRate = 1.0;
 
@@ -575,7 +575,7 @@ function simulation() {
     var stepsPerFrame = 100;
     var stepNumber = 0;
 
-    var deterrentX = 510;
+    var deterrentX = 520;
     var deterrentY = 300;
 
     function nearestSurfacePoint(x, y)
