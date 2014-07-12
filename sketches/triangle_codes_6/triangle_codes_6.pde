@@ -2,19 +2,20 @@ import java.util.Map;
 
 float triangle_size = 8;
 int word_len = 8;
-int code_words = 128;
-int max_flip_sqrt = 10;
+int code_words = 256;
+int max_flip_sqrt = 5;
 float goal_x, goal_y;
 
 int turtle_angle = 0;
 int turtle_x = 0;
 int turtle_y = 0;
 HashMap<Long, Boolean> turtle_triangle_memo;
+HashMap<Long, Boolean> turtle_edge_memo;
 
 PFont monoFont;
 int[] code;
 float iterations_per_frame = 200;
-float goal_milliseconds_per_improvement = 10.0;
+float goal_milliseconds_per_improvement = 30.0;
 
 float coordX(int x, int y) {
   // Triangle to cartesian coordinate transform.
@@ -43,22 +44,7 @@ void turn(int a) {
   turtle_angle %= 3;
 }
 
-
-void bit(boolean b, boolean draw) {
-  // Triangle to the left/right of the turtle.
-
-  // Move forward, turn, move forward, turn,
-  // create triangle from the last three points.
-  // Optionally draw it.
-
-  int tx0 = turtle_x, ty0 = turtle_y;
-  move();
-  turn(b ? -1 : 1);
-  int tx1 = turtle_x, ty1 = turtle_y;
-  move();
-  turn(b ? -1 : 1);
-  int tx2 = turtle_x, ty2 = turtle_y;
-
+long triangleKey(int tx0, int ty0, int tx1, int ty1, int tx2, int ty2) {
   // 16-bit vertex keys
   long k0 = ((tx0 & 0xFF) << 8) | (ty0 & 0xFF);
   long k1 = ((tx1 & 0xFF) << 8) | (ty1 & 0xFF);
@@ -87,14 +73,56 @@ void bit(boolean b, boolean draw) {
       }
     }
   }
+  return k;  
+}
 
+long edgeKey(int tx0, int ty0, int tx1, int ty1) {
+  // 16-bit vertex keys
+  long k0 = ((tx0 & 0xFF) << 8) | (ty0 & 0xFF);
+  long k1 = ((tx1 & 0xFF) << 8) | (ty1 & 0xFF);
+
+  // Sorted edge key
+  long k;
+  if (k0 < k1) {
+    k = k0 | (k1 << 16);
+  } else {
+    k = k1 | (k0 << 16);
+  }
+  return k;  
+}
+
+void bit(boolean b, boolean draw) {
+  // Triangle to the left/right of the turtle.
+
+  // Move forward, turn, move forward, turn,
+  // create triangle from the last three points.
+  // Optionally draw it.
+
+  int tx0 = turtle_x, ty0 = turtle_y;
+  move();
+  turn(b ? -1 : 1);
+  int tx1 = turtle_x, ty1 = turtle_y;
+  move();
+  turn(b ? -1 : 1);
+  int tx2 = turtle_x, ty2 = turtle_y;
+
+  long k = triangleKey(tx0, ty0, tx1, ty1, tx2, ty2);
   if (turtle_triangle_memo.containsKey(k)) {
     // This is a duplicate triangle.
     return;
   }
 
-  // We've been to this triangle.
+  // Now calculate keys for each triangle edge
+  
+  long k1 = edgeKey(tx0, ty0, tx1, ty1);
+  long k2 = edgeKey(tx1, ty1, tx2, ty2);
+  long k3 = edgeKey(tx2, ty2, tx0, ty0);
+  
+  // Record memo
   turtle_triangle_memo.put(k, true);
+  turtle_edge_memo.put(k1, true);
+  turtle_edge_memo.put(k2, true);
+  turtle_edge_memo.put(k3, true);
 
   if (draw) {
     triangle( coordX(tx0, ty0), coordY(tx0, ty0),
@@ -110,6 +138,7 @@ void reset() {
   turtle_y = 0;
   turtle_angle = 0;
   turtle_triangle_memo = new HashMap<Long, Boolean>();
+  turtle_edge_memo = new HashMap<Long, Boolean>();
 }
 
 void bits(int b, int len, boolean draw) {
@@ -130,7 +159,7 @@ void setup() {
   }
 }
 
-void improveCode( int baselineX, int baselineY, int baselineCount, float goalX, float goalY ) {
+void improveCode( int baselineX, int baselineY, int baselineTriCount, int baselineEdgeCount, float goalX, float goalY ) {
   int[] c = new int[code.length];
 
   int iters = (int)iterations_per_frame;
@@ -197,7 +226,8 @@ void improveCode( int baselineX, int baselineY, int baselineCount, float goalX, 
     float d2x = coordX(turtle_x, turtle_y) - goalX;
     float d2y = coordY(turtle_x, turtle_y) - goalY;
    
-    int iCount = turtle_triangle_memo.size();
+    int triCount = turtle_triangle_memo.size();
+    int edgeCount = turtle_edge_memo.size();
     float dist1 = d1x*d1x + d1y*d1y;
     float dist2 = d2x*d2x + d2y*d2y;
    
@@ -205,12 +235,16 @@ void improveCode( int baselineX, int baselineY, int baselineCount, float goalX, 
         (dist2 < dist1 ||               // A clear improvement in accuracy toward goal
          (turtle_x == baselineX &&      // Or the same endpoint with a different path
           turtle_y == baselineY &&
-          iCount >= baselineCount))) {  // And not less complex
+          triCount >= baselineTriCount &&   // And not less complex
+          edgeCount <= baselineEdgeCount    // Less surface area for the same volume
+          ))) {
    
       // This random change didn't hurt. Keep it!
       baselineX = turtle_x;
       baselineY = turtle_y;
-      baselineCount = iCount;
+      baselineTriCount = triCount;
+      baselineEdgeCount = edgeCount;
+
     } else {
       // Revert
       arrayCopy(c, code);
@@ -254,10 +288,11 @@ void draw() {
   
   int baselineX = turtle_x;
   int baselineY = turtle_y;
-  int baselineCount = turtle_triangle_memo.size();
+  int baselineTriangleCount = turtle_triangle_memo.size();
+  int baselineEdgeCount = turtle_edge_memo.size();
 
   noStroke();
-  fill(255, 40);  
+  fill(255, 60);  
 
   // Tiled copies of the pattern
   for (int j = 0; j < 4; j++) {
@@ -281,7 +316,7 @@ void draw() {
   }
 
   int t1 = millis();
-  improveCode( baselineX, baselineY, baselineCount, goal_x, goal_y );
+  improveCode( baselineX, baselineY, baselineTriangleCount, baselineEdgeCount, goal_x, goal_y );
   int t2 = millis();
   iterations_per_frame = constrain(iterations_per_frame -
     (t2 - t1 - goal_milliseconds_per_improvement) * 0.8, 1.0, 100000.0); 
