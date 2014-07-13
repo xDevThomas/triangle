@@ -8,7 +8,7 @@
 
 var Graph = function() {
     // Limits
-    this.maxTriangles = 300;
+    this.maxTriangles = 500;
     this.maxEdges = this.maxTriangles * 3;
     this.pointsPerEdge = 6;
     this.pointsPerTriangle = this.pointsPerEdge * 3;
@@ -461,22 +461,22 @@ function simulation() {
     }
 
     var center = [canvas.width/2, canvas.height/2];
-    var unitRadius = canvas.width * 0.02;
+    var unitRadius = canvas.width * 0.01;
 
     var grid;
-    var a = new Uint8Array(32);
+    var a = new Uint8Array(64);
 
     // Overall simulation timestep size. Larger values run faster but have more
     // error. If the whole shape "drifts" or the vertices appear kinked, decrease K.
-    var k = 0.1;
+    var k = 0.06;
 
-    var pressureK = 0.08;
+    var pressureK = 0.09;
     var tensionK = 0.4;
     var surfaceTensionK = 1.0;
     var collisionK = 0;
     var kRate = 1.0;
 
-    var stepsPerFrame = 1000;
+    var stepsPerFrame = 100;
     var stepNumber = 0;
 
     function step()
@@ -505,7 +505,7 @@ function simulation() {
 
     function onFrame(event)
     {
-        if ((stepNumber % 10000) == 0) {
+        if ((stepNumber % 4000) == 0) {
             grid = new TriangleGrid(
                 [ canvas.width/2 - unitRadius * 0.5, canvas.height/2 + unitRadius * Math.sqrt(3)/2 ],
                 [ canvas.width/2 + unitRadius,       canvas.height/2 ],
@@ -513,7 +513,14 @@ function simulation() {
             );
 
             a[0|(Math.random(1)*a.length)] = 0|(Math.random(1)*255);
+            a[0|(Math.random(1)*a.length)] = 0|(Math.random(1)*255);
+            a[0|(Math.random(1)*a.length)] = 0|(Math.random(1)*255);
+            a[0|(Math.random(1)*a.length)] = 0|(Math.random(1)*255);
+
             grid.bytes(a);
+            grid.bytes(a);
+            grid.bytes(a);
+
             grid.makeGraph();
             stepNumber = 0;
         }
