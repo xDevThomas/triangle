@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script type="text/javascript">
+
+// Design sketch for "Play" project.
+// (C) Micah Elizabeth Scott 2014
+
+var Graph = function() {
+    // Limits
+    this.maxTriangles = 300;
+    this.maxEdges = this.maxTriangles * 3;
+    this.pointsPerEdge = 6;
+    this.pointsPerTriangle = this.pointsPerEdge * 3;
+    this.maxPoints = this.maxEdges * this.pointsPerEdge;
+
+    // Map Point ID -> (x, y, type)
+    this.numPoints = 0
+    this.pointX = new Float64Array(this.maxPoints);
+    this.pointY = new Float64Array(this.maxPoints);
+    this.pointType = new Uint8Array(this.maxPoints);
+
+    // Map Edge ID -> Fixed-size list of Point IDs
+    this.numEdges = 0
+    this.edgePointIDs = new Uint32Array(this.maxPoints);
+
+    // Edge ID -> Number of cells referencing this edge
+    this.edgeCellCounts = new Uint8Array(this.maxEdges);
+
+    // Triangle ID -> Three edges, clockwise order. High bit reverses order.
+    this.numTriangles = 0
+    this.triangleEdgeIDs = new Uint32Array(this.maxEdges);
+
+    // Triangle ID -> Fixed size list of Point IDs
+    this.trianglePointIDs = new Uint32Array(this.maxPoints);
+
+    // Triangle ID -> Resting area
+    this.triangleRestingArea = new Float64Array(this.maxTriangles);
+}
+
+Graph.prototype.triangleCanvasPath = function( ctx, tri ) {
+    ctx.beginPath();
+    var begin = tri * this.pointsPerTriangle;
+    var end = (tri + 1) * this.pointsPerTriangle;
+    for (var i = begin; i < end; i++) {
+        var p = this.trianglePointIDs[i];
+        ctx.lineTo(this.pointX[p], this.pointY[p]);
+    }
+    ctx.closePath();
+}
+
+Graph.prototype.edgeCanvasPath = function( ctx, edge ) {
+    ctx.beginPath();
+    var begin = edge * this.pointsPerEdge;
+    var end = (edge + 1) * this.pointsPerEdge;
+    for (var i = begin; i < end; i++) {
+        var p = this.edgePointIDs[i];
+        ctx.lineTo(this.pointX[p], this.pointY[p]);
+    }
+}
+
+Graph.prototype.draw = function( ctx ) {
+    // Triangle filling
+    ctx.fillStyle = 'rgba(0, 130, 0, 0.4)';
+    for (var tri = 0; tri < this.numTriangles; tri++) {
+        this.triangleCanvasPath(ctx, tri);
+        ctx.fill();
+    }
+
+    // Triangle mesh
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    for (var edge = 0; edge < this.numEdges; edge++) {
+        this.edgeCanvasPath(ctx, edge);
+        ctx.stroke();
+    }
+
+    // Vertices
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    for (var p = 0; p < this.numPoints; p++) {
+        if (this.pointType[p] == 0) {
+            ctx.beginPath();
+            ctx.arc(this.pointX[p], this.pointY[p], 2, 0, Math.PI*2);
+            ctx.fill();
+        }
+    }
+}
+
+Graph.prototype.addPoint = function( x, y, type ) {
+    var n = this.numPoints++;
+    this.pointX[n] = x; 
+    this.pointY[n] = y;
+    this.pointType[n] = type || 0;
+    return n;
+}
+
+Graph.prototype.addEdge = function( a, b ) {
+    // Add an edge between two points, with interpolated midpoints.
+
+    var n = this.numEdges++;
+
+    for (var i = 0; i < this.pointsPerEdge; i++) {
+        var p;
+
+        if (i == 0) {
+            // First point
+            p = a;
+        } else if (i == this.pointsPerEdge - 1) {
+            // Last point
+            p = b;
+        } else {
+            // New midpoint; If the edge is unique, this midpoint will be too.
+            var t = i / (this.pointsPerEdge - 1);
+            p = this.addPoint(
+                this.pointX[a] + (this.pointX[b] - this.pointX[a]) * t,
+                this.pointY[a] + (this.pointY[b] - this.pointY[a]) * t,
+                1
+            );
+        }
+
+        this.edgePointIDs[n * this.pointsPerEdge + i] = p;
+    }
+    return n;
+}
+
+Graph.prototype.edge = function( a, b ) {
+    // Search for an existing edge, in either direction. Returns an edge ID,
+    // with high bit indicating order.
+
+    for (var n = 0; n < this.numEdges; n++) {
+        var edgeA = this.edgePointIDs[n * this.pointsPerEdge];
+        var edgeB = this.edgePointIDs[(n + 1) * this.pointsPerEdge - 1];
+        if (edgeA == a && edgeB == b) {
+            return n;
+        }
+        if (edgeA == b && edgeB == a) {
+            return n | 0x80000000;
+        }
+    }
+    return this.addEdge(a, b);
+}
+
+Graph.prototype.isSurface = function( edge ) {
+    return this.edgeCellCounts[edge & 0x7FFFFFFF] == 1;
+}
+
+Graph.prototype.addTriangle = function( a, b, c ) {
+    // Add a triangle between points, creating edges as necessary.
+
+    var tri = this.numTriangles++;
+
+    var ab = this.edge(a, b);
+    var bc = this.edge(b, c);
+    var ca = this.edge(c, a);
+
+    this.triangleEdgeIDs[tri*3    ] = ab;
+    this.triangleEdgeIDs[tri*3 + 1] = bc;
+    this.triangleEdgeIDs[tri*3 + 2] = ca;
+
+    this.edgeCellCounts[ab & 0x7FFFFFFF] += 1;
+    this.edgeCellCounts[bc & 0x7FFFFFFF] += 1;
+    this.edgeCellCounts[ca & 0x7FFFFFFF] += 1;
+
+    // Walk edges to create trianglePointIDs array.
+    // This is redundant information, but precalculated for speed.
+    for (var edge = 0; edge < 3; edge++) {
+        var edgeID = this.triangleEdgeIDs[tri * 3 + edge];
+        var dest = (tri * 3 + edge) * this.pointsPerEdge;
+
+        if (edgeID & 0x80000000) {
+            // Reverse
+
+            edgeID &= 0x7FFFFFFF;
+            for (var n = this.pointsPerEdge - 1; n >= 0; n--) {
+                var p = this.edgePointIDs[n + this.pointsPerEdge * edgeID];
+                this.trianglePointIDs[dest++] = p;
+            }
+
+        } else {
+            for (var n = 0; n < this.pointsPerEdge; n++) {
+                var p = this.edgePointIDs[n + this.pointsPerEdge * edgeID];
+                this.trianglePointIDs[dest++] = p;
+            }
+        }
+    }
+
+    // Now we can calculate area at rest
+    this.triangleRestingArea[tri] = this.triangleArea(tri);
+
+    return tri;
+};
+
+Graph.prototype.triangleArea = function( tri ) {
+    var begin = tri * this.pointsPerTriangle;
+    var end = (tri + 1) * this.pointsPerTriangle;
+    var prev = end - 1; // Loop around
+    var area = 0;
+
+    for (var i = begin; i < end; i++) {
+        var pI = this.trianglePointIDs[i];
+        var pJ = this.trianglePointIDs[prev];
+        area += (this.pointX[pJ] + this.pointX[pI]) * (this.pointY[pJ] - this.pointY[pI]);
+        prev = i;
+    }
+
+    return area/2;
+}
+
+Graph.prototype.trianglePressure = function( tri ) {
+    return this.triangleRestingArea[tri] / this.triangleArea(tri);
+}
+
+Graph.prototype.applyPressureAlongEdge = function( edgeN, p ) {
+    // Apply pressure uniformly along the whole edge
+
+    if (edgeN & 0x80000000) {
+        // Reverse
+        edgeN &= 0x7FFFFFFF;
+        p = -p;
+    }
+
+    for (var i = 1; i < this.pointsPerEdge; i++) {
+        var p1 = this.edgePointIDs[edgeN * this.pointsPerEdge + i - 1];
+        var p2 = this.edgePointIDs[edgeN * this.pointsPerEdge + i];
+
+        var dx = this.pointX[p2] - this.pointX[p1];
+        var dy = this.pointY[p2] - this.pointY[p1];
+
+        // Normal vector with length equal to segment length
+        // Multiply length by pressure
+        this.pointX[p1] += dy * p;
+        this.pointY[p1] -= dx * p;
+        this.pointX[p2] += dy * p;
+        this.pointY[p2] -= dx * p;
+    }
+}
+
+Graph.prototype.applyPressureInTriangle = function( triN, p ) {
+    for (var edge = 0; edge < 3; edge++) {
+        this.applyPressureAlongEdge(this.triangleEdgeIDs[triN*3 + edge], p);
+    }
+}
+
+Graph.prototype.contractEdge = function( edgeN, k ) {
+    edgeN &= 0x7FFFFFFF;
+    for (var i = 1; i < this.pointsPerEdge; i++) {
+        var p1 = this.edgePointIDs[edgeN * this.pointsPerEdge + i - 1];
+        var p2 = this.edgePointIDs[edgeN * this.pointsPerEdge + i];
+
+        var dx = this.pointX[p2] - this.pointX[p1];
+        var dy = this.pointY[p2] - this.pointY[p1];
+
+        // Normal vector with length equal to segment length
+        // Multiply length by pressure
+        this.pointX[p1] += dx * k;
+        this.pointY[p1] += dy * k;
+        this.pointX[p2] -= dx * k;
+        this.pointY[p2] -= dy * k;
+    }
+}
+
+var TriangleGrid = function( a, b, c ) {
+    // Regular triangular grid, starting with a seed triangle.
+    // Points are measured in a coordinate system that uses the AB and AC
+    // vectors as its two axes.
+
+    this.graph = new Graph();
+
+    this.a = a;
+    this.ab = [b[0] - a[0], b[1] - a[1]];
+    this.ac = [c[0] - a[0], c[1] - a[1]];
+
+    // Points stored in our basis coordinate system
+    this.triangles = []
+
+    // Memo of triangles for existance check
+    this.triangleMemo = {};
+
+    // Cached points
+    this.points = [];
+
+    this.turtle = [ 0, 0, 0 ];
+}
+
+TriangleGrid.prototype.add = function( tx0, ty0, tx1, ty1, tx2, ty2 ) {
+
+    // 16-bit vertex keys
+    var k0 = ((tx0 & 0xFF) << 8) | (ty0 & 0xFF);
+    var k1 = ((tx1 & 0xFF) << 8) | (ty1 & 0xFF);
+    var k2 = ((tx2 & 0xFF) << 8) | (ty2 & 0xFF);
+
+    // Sorted triangle key
+    var tk;
+    if (k0 < k1) {
+        if (k0 < k2) {
+            if (k1 < k2) {
+                tk = k0 + (k1 * 65536) + (k2 * 4294967296);
+            } else {
+                tk = k0 + (k2 * 65536) + (k1 * 4294967296);
+            }
+        } else {
+                tk = k2 + (k0 * 65536) + (k1 * 4294967296);
+        }
+    } else {
+        if (k0 < k2) {
+            tk = k1 + (k0 * 65536) + (k2 * 4294967296);
+        } else {
+            if (k1 < k2) {
+                tk = k1 + (k2 * 65536) + (k0 * 4294967296);
+            } else {
+                tk = k2 + (k1 * 65536) + (k0 * 4294967296);
+            }
+        }
+    }
+
+    // function hex(x) { return x.toString(16) }
+    // console.log(tx0, ty0, tx1, ty1, tx2, ty2, hex(k0), hex(k1), hex(k2), hex(tk));
+
+    if (!this.triangleMemo[tk]) {
+        // Not a duplicate triangle
+
+        // Remember not to visit this grid location twice.
+        // This is a sparse array that we're using as a fast hash set.
+        this.triangleMemo[tk] = true;
+
+        this.triangles.push([ tx0, ty0, tx1, ty1, tx2, ty2 ]);
+    }    
+}
+
+TriangleGrid.prototype.bits = function( word, count ) {
+
+    var tx = this.turtle[0];
+    var ty = this.turtle[1];
+    var ta = this.turtle[2];
+
+    while (count > 0) {
+
+        // Record first triangle vertex
+        var tx0 = tx, ty0 = ty;
+
+        // Move forward
+        switch (ta) {
+            case 0: ty = ty + 1; break;
+            case 1: tx = tx - 1; break;
+            case 2: ty = ty - 1; tx = tx + 1; break;
+        }
+
+        // Turn according to the current bit
+        if (word & 1) {
+            switch (ta) {
+                case 0: ta = 1; break;
+                case 1: ta = 2; break;
+                case 2: ta = 0; break;
+            }
+        } else {
+            switch (ta) {
+                case 0: ta = 2; break;
+                case 1: ta = 0; break;
+                case 2: ta = 1; break;
+            }
+        }
+
+        // Record second triangle vertex
+        var tx1 = tx, ty1 = ty;
+
+        // Move forward
+        switch (ta) {
+            case 0: ty++; break;
+            case 1: tx--; break;
+            case 2: ty--; tx++; break;
+        }
+
+        // Turn according to the current bit
+        if (word & 1) {
+            switch (ta) {
+                case 0: ta = 1; break;
+                case 1: ta = 2; break;
+                case 2: ta = 0; break;
+            }
+        } else {
+            switch (ta) {
+                case 0: ta = 2; break;
+                case 1: ta = 0; break;
+                case 2: ta = 1; break;
+            }
+        }
+
+        // Record triangle, and keep triangle winding order consistent
+        if (word & 1) {
+            this.add(tx0, ty0, tx1, ty1, tx, ty);
+        } else {
+            this.add(tx, ty, tx1, ty1, tx0, ty0);
+        }
+
+        // Next bit
+        count--;
+        word >>= 1;
+    }
+
+    this.turtle = [ tx, ty, ta ];
+}
+
+TriangleGrid.prototype.bytes = function( array ) {
+    for (var i = 0; i < array.length; i++) {
+        this.bits(array[i], 8);
+    }
+}
+
+
+TriangleGrid.prototype.point = function( c ) {
+    // Search cache
+    for (var i = 0; i < this.points.length; i++) {
+        if (this.points[i][0] == c[0] && this.points[i][1] == c[1]) {
+            return this.points[i][2];
+        }
+    }
+
+    // Convert triangle coordinates to pixel coordinates
+    var p = this.graph.addPoint(
+        this.a[0] + this.ab[0] * c[0] + this.ac[0] * c[1],
+        this.a[1] + this.ab[1] * c[0] + this.ac[1] * c[1]
+    );
+
+    this.points.push([ c[0], c[1], p ]);
+    return p;
+}
+
+TriangleGrid.prototype.makeGraph = function() {
+    // Create a graph cell for each triangle
+    for (var i = 0; i < this.triangles.length; i++) {
+        var t = this.triangles[i];
+        var aX = t[0];
+        var aY = t[1];
+        var bX = t[2];
+        var bY = t[3];
+        var cX = t[4];
+        var cY = t[5];
+
+        this.graph.addTriangle(
+            this.point([ aX, aY ]),
+            this.point([ bX, bY ]),
+            this.point([ cX, cY ])
+        );
+    }
+}
+
+TriangleGrid.prototype.draw = function( ctx ) {
+    this.graph.draw(ctx);
+}
+
+function simulation() {
+
+    var canvas = document.getElementById('bitmap');
+    canvas.width = 800;
+    canvas.height = 600;
+
+    var context = canvas.getContext('2d');
+    var mouse = [ 0, 0 ];
+    canvas.onmousemove = function (e) {
+        mouse[0] = e.pageX - this.offsetLeft;
+        mouse[1] = e.pageY - this.offsetTop;
+    }
+
+    var center = [canvas.width/2, canvas.height/2];
+    var unitRadius = canvas.width * 0.02;
+
+    var grid;
+    var a = new Uint8Array(32);
+
+    // Overall simulation timestep size. Larger values run faster but have more
+    // error. If the whole shape "drifts" or the vertices appear kinked, decrease K.
+    var k = 0.1;
+
+    var pressureK = 0.08;
+    var tensionK = 0.4;
+    var surfaceTensionK = 1.0;
+    var collisionK = 0;
+    var kRate = 1.0;
+
+    var stepsPerFrame = 1000;
+    var stepNumber = 0;
+
+    function step()
+    {
+        // Per-edge forces
+        for (var edge = 0; edge < grid.graph.numEdges; edge++) {
+            if (grid.graph.isSurface(edge)) {
+
+                // Surface tension
+                grid.graph.contractEdge(edge, k * (tensionK + surfaceTensionK));
+            } else {
+                // Internal tension
+                grid.graph.contractEdge(edge, k * tensionK);
+            }
+        }
+
+        // Per-triangle forces
+        for (var tri = 0; tri < grid.graph.numTriangles; tri++) {
+            var p = grid.graph.trianglePressure(tri);
+            grid.graph.applyPressureInTriangle(tri, -p * k * pressureK);
+        }
+
+        stepNumber++;
+        k *= kRate;        
+    }
+
+    function onFrame(event)
+    {
+        if ((stepNumber % 10000) == 0) {
+            grid = new TriangleGrid(
+                [ canvas.width/2 - unitRadius * 0.5, canvas.height/2 + unitRadius * Math.sqrt(3)/2 ],
+                [ canvas.width/2 + unitRadius,       canvas.height/2 ],
+                [ canvas.width/2 - unitRadius * 0.5, canvas.height/2 - unitRadius * Math.sqrt(3)/2 ]
+            );
+
+            a[0|(Math.random(1)*a.length)] = 0|(Math.random(1)*255);
+            grid.bytes(a);
+            grid.makeGraph();
+            stepNumber = 0;
+        }
+
+        for (var i = 0; i < stepsPerFrame; i++) {
+            step();
+        }
+
+        // Background
+        context.fillStyle = 'white';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        grid.draw(context);
+
+        context.fillStyle = "black";
+        context.font = "18px Futura";
+        context.fillText("Triangle / Play", 10, 30);
+        context.font = "12px Futura";
+        context.fillText("Simulation step #" + stepNumber + " : " + 
+            grid.graph.numTriangles + " triangles, " + grid.graph.numPoints + " points", 10, 50);
+        context.fillText("Micah Elizabeth Scott / 2014", 10, canvas.height - 10);
+
+        window.requestAnimationFrame(onFrame);
+    }
+
+    window.requestAnimationFrame(onFrame);
+}
+
+</script>
+</head>
+<body onload='simulation()' >
+    <img id='image' />
+    <canvas id='bitmap'></canvas>
+</body>
+</html>
