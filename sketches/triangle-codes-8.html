@@ -22,9 +22,10 @@ var TriangleBuilder = function()
 
     // Force model
     this.k = 0.2;
-    this.pressureK = 0.6;
-    this.tensionK = 0.7;
-    this.surfaceTensionK = 1.5;
+    this.pressureK = 1.0;
+    this.tensionK = 1.0;
+    this.surfaceTensionK = 1.0;
+    this.restingArea = 1.0;
 
     // Size of triangle memo buffer, and maximum size of shapes we can build.
     // Must be a power of two.
@@ -33,7 +34,7 @@ var TriangleBuilder = function()
     this.worldArea = this.worldSize * this.worldSize
 
     // Maximum triangle counts, based on maximum bitstream sizes
-    this.maxWords = 16;
+    this.maxWords = 64;
     this.maxBytes = this.maxWords * 4;
     this.maxTriangles = this.maxBytes * 8;
 
@@ -490,6 +491,7 @@ TriangleBuilder.prototype.simulate = function( steps )
     // Simulate the forces acting on the points in this shape,
     // running a number of iterations in succession.
 
+    var restingArea = this.restingArea;
     var numEdges = this.numEdges;
     var numTriangles = this.numTriangles;
     var edgeCellCounts = this.edgeCellCounts;
@@ -565,10 +567,8 @@ TriangleBuilder.prototype.simulate = function( steps )
 
             // Force due to pressure: Resting area / calculated area.
             // Ideal gas law for constant temperature.
-            // The resting area of our triangle is 0.5 square units,
-            // which corresoinds to an area_2x of 1.0.
 
-            var f = kp * ((1.0 / area_2x) - 1.0);
+            var f = kp * ((restingArea / area_2x) - 1.0);
 
             // Apply force normal to each perimeter segment.
             // Includes multiply by segment length.
@@ -620,14 +620,13 @@ function simulation()
     var center = [canvas.width/2, canvas.height/2];
     var unitRadius = canvas.width * 0.01;
 
-    tb.clear();
-    for (var i = 0; i < tb.bitstream.length; i++) {
-        tb.bitstream[i] = 0|(Math.random()*0xffffffff);
-    }
-    tb.build();
-
     function onFrame(event)
     {
+        tb.clear();
+        for (var i = 0; i < tb.bitstream.length; i++) {
+            tb.bitstream[i] = i * mouse[1];
+        }
+        tb.build();
         tb.simulate(100);
 
         // Background
