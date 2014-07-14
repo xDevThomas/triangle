@@ -15,6 +15,17 @@ var TriangleBuilder = function()
     //
     // (C) Micah Elizabeth Scott 2014
 
+    // Default visual style
+    this.triangleFillStyle = '#54825d';
+    this.edgeStrokeStyle = '#2e4834';
+    this.edgeStrokeWidth = 1/8;
+
+    // Force model
+    this.k = 0.2;
+    this.pressureK = 0.6;
+    this.tensionK = 0.7;
+    this.surfaceTensionK = 1.5;
+
     // Size of triangle memo buffer, and maximum size of shapes we can build.
     // Must be a power of two.
     this.worldSizeLog2 = 10;
@@ -22,13 +33,13 @@ var TriangleBuilder = function()
     this.worldArea = this.worldSize * this.worldSize
 
     // Maximum triangle counts, based on maximum bitstream sizes
-    this.maxWords = 1024;
+    this.maxWords = 16;
     this.maxBytes = this.maxWords * 4;
     this.maxTriangles = this.maxBytes * 8;
 
     // Amount of simulation detail; each edge is simulated with many intermediate
     // points, to give the cells flexible walls that conform to their surroundings.
-    this.pointsPerEdge = 6;
+    this.pointsPerEdge = 10;
     this.maxEdges = this.maxTriangles * 3;
     this.pointsPerTriangle = (this.pointsPerEdge - 1) * 3;
     this.maxPoints = this.maxEdges * this.pointsPerEdge;
@@ -58,7 +69,7 @@ var TriangleBuilder = function()
 
     // For each edge with a current generation tag in the edgeMemo, the edgeMap gives
     // the index in edgePointIDs / edgeCellCounts.
-    this.edgeMap = new Uint32Array(this.worldArea);
+    this.edgeMap = new Uint32Array(this.worldArea * 3);
 
     // Point memo: Each (x,y) cell maps to a generation number, telling us if we've
     // created the point yet. This helps us deduplicate points when mapping from the
@@ -104,13 +115,82 @@ TriangleBuilder.prototype.clear = function()
     this.generation++;
 }
 
+TriangleBuilder.prototype.trianglePath = function( ctx, tri )
+{
+    // Create a path on a Canvas context, for triangle with the indicated ID.
+    // Coordinates are in simulation space; use the Canvas transform methods
+    // to scale, rotate, and position the shape.
+
+    ctx.beginPath();
+
+    var begin = tri * this.pointsPerTriangle;
+    var end = (tri + 1) * this.pointsPerTriangle;
+    var trianglePointIDs = this.trianglePointIDs;
+    var pX = this.pointX;
+    var pY = this.pointY;
+
+    for (var i = begin; i < end; i++) {
+        var p = trianglePointIDs[i];
+        ctx.lineTo(pX[p], pY[p]);
+    }
+
+    ctx.closePath();
+}
+
+TriangleBuilder.prototype.edgePath = function( ctx, edge )
+{
+    // Create a path on a Canvas context, for edge with the indicated ID.
+    // Coordinates are in simulation space; use the Canvas transform methods
+    // to scale, rotate, and position the shape.
+
+    ctx.beginPath();
+
+    var begin = edge * this.pointsPerEdge;
+    var end = (edge + 1) * this.pointsPerEdge;
+    var edgePointIDs = this.edgePointIDs;
+    var pX = this.pointX;
+    var pY = this.pointY;
+
+    for (var i = begin; i < end; i++) {
+        var p = edgePointIDs[i];
+        ctx.lineTo(pX[p], pY[p]);
+    }
+}
+
+TriangleBuilder.prototype.draw = function( ctx )
+{
+    // Draw the current shape in a visual style set by triangleFillStyle & edgeStrokeStyle.
+    // We don't need to explicitly draw vertices. Using the 'round' line cap style,
+    // we get a darker overlap at the joints between edge lines.
+    //
+    // Coordinates are in simulation space; use the Canvas transform methods
+    // to scale, rotate, and position the shape.
+
+    ctx.fillStyle = this.triangleFillStyle;
+    for (var tri = 0; tri < this.numTriangles; tri++) {
+        this.trianglePath(ctx, tri);
+        ctx.fill();
+    }
+
+    ctx.strokeStyle = this.edgeStrokeStyle;
+    ctx.lineWidth = this.edgeStrokeWidth;
+    ctx.lineCap = 'round';
+
+    var numEdges = this.numEdges;
+    for (var edge = 0; edge < numEdges; edge++) {
+        this.edgePath(ctx, edge);
+        ctx.stroke();
+    }
+}
+
 TriangleBuilder.prototype._gridPoint = function(x, y)
 {
     // Look for a point at the integer grid location (x, y). Return its ID.
     // Create the point if it doesn't already ecist.
 
+    var worldMask = (1 << this.worldSizeLog2) - 1;
     var pointMemo = this.pointMemo;
-    var cell = x | (y << this.worldSizeLog2);
+    var cell = (worldMask & x) | ((worldMask & y) << this.worldSizeLog2);
     var generation = this.generation;
 
     if (pointMemo[cell] == generation) {
@@ -137,8 +217,9 @@ TriangleBuilder.prototype._edge = function(cellX, cellY, cellDir, iX1, iY1, iX2,
     // an edge ID for this edge in its canonical direction. Depending on the triangle
     // direction, we may end up using this edge as-is or reversed.
 
+    var worldMask = (1 << this.worldSizeLog2) - 1;
     var edgeMemo = this.edgeMemo;
-    var cell = cellDir + 3 * (cellX | (cellY << this.worldSizeLog2));
+    var cell = cellDir + 3 * ((cellX & worldMask) | ((cellY & worldMask) << this.worldSizeLog2));
     var generation = this.generation;
 
     if (edgeMemo[cell] == generation) {
@@ -148,7 +229,6 @@ TriangleBuilder.prototype._edge = function(cellX, cellY, cellDir, iX1, iY1, iX2,
     edgeMemo[cell] = generation;
     var p = this.numEdges;
     this.edgeMap[cell] = p;
-
     // Reset edge count
     this.edgeCellCounts[p] = 0;
 
@@ -216,6 +296,7 @@ TriangleBuilder.prototype.build = function()
     var ty = this.turtle[1];
     var ta = this.turtle[2];
 
+    var edgeCellCounts = this.edgeCellCounts;
     var edgePointIDs = this.edgePointIDs;
     var triangleEdgeIDs = this.triangleEdgeIDs;
     var trianglePointIDs = this.trianglePointIDs;
@@ -267,17 +348,18 @@ TriangleBuilder.prototype.build = function()
             if (w & 1) {    // 1=Right
 
                 if (ta == 0) {
+                    cellX--;
                     ty++;
                     tx--;
                     ta = 2;
 
                 } else if (ta == 1) {
+                    cellX--;
                     cellY--;
                     ty--;
                     ta = 0;
 
                 } else { // ta == 2
-                    cellX++;
                     cellY--;
                     tx++;
                     ta = 1;
@@ -303,7 +385,7 @@ TriangleBuilder.prototype.build = function()
             }
 
             // Key for triangle memo/map
-            var tri = (w & 1) | (cellX << 1) | (cellY << yBit);
+            var tri = (w & 1) | ((cellX & worldMask) << 1) | ((cellY & worldMask) << yBit);
 
             if (triMemo[tri] != generation) {
                 // New triangle
@@ -315,21 +397,25 @@ TriangleBuilder.prototype.build = function()
                     // Clockwise / Right / 1 triangle
 
                     var e1 = this._edge(
-                        cellX, cellY, 0,
-                        cellX, cellY, cellX, cellY+1);
+                        cellX+1, cellY, 0,
+                        cellX+1, cellY, cellX+1, cellY+1);
 
                     var e2 = this._edge(
-                        cellX, cellY, 1,
-                        cellX, cellY+1, cellX+1, cellY);
+                        cellX, cellY+1, 2,
+                        cellX+1, cellY+1, cellX, cellY+1);
 
                     var e3 = this._edge(
-                        cellX, cellY, 2,
-                        cellX+1, cellY, cellX, cellY);
+                        cellX, cellY, 1,
+                        cellX, cellY+1, cellX+1, cellY);
 
                     // Reversed traversal of the edges
                     triangleEdgeIDs[numTriangles*3  ] = e3 | 0x80000000;
                     triangleEdgeIDs[numTriangles*3+1] = e2 | 0x80000000;
                     triangleEdgeIDs[numTriangles*3+2] = e1 | 0x80000000;
+
+                    edgeCellCounts[e1]++;
+                    edgeCellCounts[e2]++;
+                    edgeCellCounts[e3]++;
 
                     e1 *= pointsPerEdge;
                     e2 *= pointsPerEdge;
@@ -365,6 +451,10 @@ TriangleBuilder.prototype.build = function()
                     triangleEdgeIDs[numTriangles*3+1] = e2;
                     triangleEdgeIDs[numTriangles*3+2] = e3;
 
+                    edgeCellCounts[e1]++;
+                    edgeCellCounts[e2]++;
+                    edgeCellCounts[e3]++;
+
                     e1 *= pointsPerEdge;
                     e2 *= pointsPerEdge;
                     e3 *= pointsPerEdge;
@@ -395,16 +485,126 @@ TriangleBuilder.prototype.build = function()
     this.numTriangles = numTriangles;
 }
 
+TriangleBuilder.prototype.simulate = function( steps )
+{
+    // Simulate the forces acting on the points in this shape,
+    // running a number of iterations in succession.
+
+    var numEdges = this.numEdges;
+    var numTriangles = this.numTriangles;
+    var edgeCellCounts = this.edgeCellCounts;
+    var pointsPerEdge = this.pointsPerEdge;
+    var edgePointIDs = this.edgePointIDs;
+    var pointX = this.pointX;
+    var pointY = this.pointY;
+    var pointsPerTriangle = this.pointsPerTriangle;
+    var trianglePointIDs = this.trianglePointIDs;
+
+    var kts = this.k * (this.tensionK + this.surfaceTensionK);
+    var kt = this.k * this.tensionK;
+    var kp = this.k * this.pressureK;
+
+    while (steps > 0) {
+
+        // Tension forces along edges
+        for (var edge = 0; edge < numEdges; edge++) {
+
+            // How much to contract by
+            var f = (edgeCellCounts[edge] == 1 ? kts : kt);
+
+            // Iterate over all points in edge
+            var begin = edge * pointsPerEdge;
+            var end = begin + pointsPerEdge;
+
+            var p1 = edgePointIDs[begin];
+            var x1 = pointX[p1];
+            var y1 = pointY[p1];
+
+            for (var i = begin + 1; i < end; i++) {
+
+                var p2 = edgePointIDs[i];
+                var x2 = pointX[p2];
+                var y2 = pointY[p2];
+
+                var dx = f * (x2 - x1);
+                var dy = f * (y2 - y1);
+
+                pointX[p1] = x1 + dx;
+                pointY[p1] = y1 + dy;
+                x1 = pointX[p2] = x2 - dx;
+                y1 = pointY[p2] = y2 - dy;
+                p1 = p2;
+            }
+        }
+
+        // Pressure forces in each triangle
+        for (var tri = 0; tri < numTriangles; tri++) {
+
+            // Calculate area, walking over all points in the triangle.
+            // This calculation gives us 2x the area.
+            var area_2x = 0;
+            {
+                var begin = tri * pointsPerTriangle;
+                var end = (tri + 1) * pointsPerTriangle;
+
+                var p1 = trianglePointIDs[end - 1]; 
+                var x1 = pointX[p1];  // Loop around
+                var y1 = pointY[p1];
+
+                for (var i = begin; i < end; i++) {
+                    var p2 = trianglePointIDs[i];
+                    var x2 = pointX[p2];
+                    var y2 = pointY[p2];
+
+                    area_2x += (x1 + x2) * (y1 - y2);
+
+                    x1 = x2;
+                    y1 = y2;
+                }
+            }
+
+            // Force due to pressure: Resting area / calculated area.
+            // Ideal gas law for constant temperature.
+            // The resting area of our triangle is 0.5 square units,
+            // which corresoinds to an area_2x of 1.0.
+
+            var f = kp * ((1.0 / area_2x) - 1.0);
+
+            // Apply force normal to each perimeter segment.
+            // Includes multiply by segment length.
+            {
+                var begin = tri * pointsPerTriangle;
+                var end = (tri + 1) * pointsPerTriangle;
+
+                var p1 = trianglePointIDs[end - 1]; 
+                var x1 = pointX[p1];  // Loop around
+                var y1 = pointY[p1];
+
+                for (var i = begin; i < end; i++) {
+                    var p2 = trianglePointIDs[i];
+                    var x2 = pointX[p2];
+                    var y2 = pointY[p2];
+
+                    var dx = x2 - x1;
+                    var dy = y2 - y1;
+
+                    pointX[p1] = x1 - dy * f;
+                    pointY[p1] = y1 + dx * f;
+                    x1 = pointX[p2] = x2 - dy * f;
+                    y1 = pointY[p2] = y2 + dx * f;
+                    p1 = p2;
+                }
+            }
+        }
+
+        steps--;
+    }
+}
 
 
 function simulation()
 {
     var tb = new TriangleBuilder();
-
-    tb.clear();
-    tb.build();
-
-    console.log(tb);
 
     var canvas = document.getElementById('bitmap');
     canvas.width = 800;
@@ -420,19 +620,32 @@ function simulation()
     var center = [canvas.width/2, canvas.height/2];
     var unitRadius = canvas.width * 0.01;
 
+    tb.clear();
+    for (var i = 0; i < tb.bitstream.length; i++) {
+        tb.bitstream[i] = 0|(Math.random()*0xffffffff);
+    }
+    tb.build();
+
     function onFrame(event)
     {
+        tb.simulate(100);
+
         // Background
         context.fillStyle = 'white';
         context.fillRect(0, 0, canvas.width, canvas.height);
 
-        context.fillStyle = "black";
+        context.fillStyle = 'black';
         context.font = "18px Futura";
         context.fillText("Triangle / Play", 10, 30);
         context.font = "12px Futura";
         // context.fillText("Simulation step #" + stepNumber + " : " + 
             // grid.graph.numTriangles + " triangles, " + grid.graph.numPoints + " points", 10, 50);
         context.fillText("Micah Elizabeth Scott / 2014", 10, canvas.height - 10);
+
+        var s = 15;
+        context.setTransform(s,0, 0,s, canvas.width/2, canvas.height/2);
+        tb.draw(context);
+        context.setTransform(1,0,0,1,0,0);
 
         window.requestAnimationFrame(onFrame);
     }
