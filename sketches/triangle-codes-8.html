@@ -759,7 +759,8 @@ function simulation()
         tb.build();
         tb.simulate(100);
 
-        captureContext.clearRect(0, 0, captureSize[0], captureSize[1]);
+        captureContext.fillStyle = 'white';
+        captureContext.fillRect(0, 0, captureSize[0], captureSize[1]);
 
         if (reference) {
             // Capture a test image; a tiny black-and-white drawing of the shape
@@ -776,6 +777,16 @@ function simulation()
             captureContext.fillText('Art', captureXY[0], captureXY[1]);
         }
 
+        // Cheap blur, so we can reward near approximations
+        captureContext.globalAlpha = 0.4;
+        for (var i = 0; i < 4; i++) {
+            captureContext.drawImage(captureCanvas, -1,  0);
+            captureContext.drawImage(captureCanvas,  1,  0);
+            captureContext.drawImage(captureCanvas,  0, -1);
+            captureContext.drawImage(captureCanvas,  0, +1);
+        }
+        captureContext.globalAlpha = 1.0;
+
         // Capture the tiny image
         var img = captureContext.getImageData(0, 0, captureSize[0], captureSize[1]);
 
@@ -786,13 +797,12 @@ function simulation()
             var a = img.data;
             var b = reference.data;
             
-            // Look at only alpha channel
-            for (var i = 3, e = i+captureSize[0]*captureSize[1]*4; i != e; i+=4) {
+            // Look at only one channel
+            for (var i = 0, e = captureSize[0]*captureSize[1]*4; i != e; i+=4) {
                 var d = a[i] - b[i];
 
-                if (d > 0) {
-                    // Image is more opaque than reference; we have some overshoot.
-                    // Weight this as less significant.
+                if (d < 0) {
+                    // Decrease weight of overshoot (ref > current)
                     d >>= 2;
                 }
 
@@ -840,6 +850,13 @@ function simulation()
         largeTransform();
         tb.drawEdgePaths(context);
         noTransform();
+
+        // Draw comparison image and reference
+
+        context.putImageData(reference, 10, 0);
+        context.globalAlpha = 0.5;
+        context.drawImage(captureCanvas, 10, 0);
+        context.globalAlpha = 1.0;
 
         // Run as fast as possible
         setTimeout(frame, 0);
