@@ -34,7 +34,7 @@ var TriangleBuilder = function()
     this.worldArea = this.worldSize * this.worldSize
 
     // Maximum triangle counts, based on maximum bitstream sizes
-    this.maxWords = 32;
+    this.maxWords = 16;
     this.maxBytes = this.maxWords * 4;
     this.maxTriangles = this.maxBytes * 8;
 
@@ -657,8 +657,17 @@ function simulation()
     var captureXY = [45, 35];
 
     var reference = null;
-    var bestBitstream = null;
-    var bestDiff = null;
+    var peakBitstream = null;
+    var peakDiff = null;
+
+    // After each mutation, we measure the new image difference
+    // divided by the saved peak. If this peak ratio is < 1.0,
+    // we found an improvement. We can choose to only accept peak
+    // ratios of even lower than 1.0, to have a stricter survival
+    // criteria for mutations. Or we can allow a ratio larger than
+    // 1.0 in order to allow some detrimental mutations to survive
+    // in order to add noise to the system.
+    var peakRatioThreshold = 1.01;
 
     // Random default bitstream
     for (var i = 0; i < tb.bitstream.length; i++) {
@@ -712,10 +721,10 @@ function simulation()
         } 
     }
 
-    function onFrame(event)
+    function frame()
     {
         // We can run a few mutation cycles per frame
-        for (var cycle = 0; cycle < 10; cycle++) {
+        for (var cycle = 0; cycle < 2; cycle++) {
 
             // Model this shape from scratch on each frame
             mutate(4);
@@ -758,19 +767,21 @@ function simulation()
                     diff += d*d;
                 } 
 
-                if (bestDiff == null || diff < bestDiff) {
-                    // This is an improvement!
+                if (peakDiff == null || diff / peakDiff < peakRatioThreshold) {
+                    // This didn't do much harm. Keep it!
 
-                    bestDiff = diff;
-                    bestBitstream = new Uint32Array(tb.bitstream.buffer.slice(0));
+                    peakDiff = diff;
+                    peakBitstream = new Uint32Array(tb.bitstream.buffer.slice(0));
 
                     document.getElementById('code').textContent =
-                        tb.toHexString() + diff;
+                        tb.toHexString();
+
+                    console.log(peakDiff, peakBitstream);
 
                 } else {
-                    // Nope. Revert.
+                    // Nope. Revert to saved peak.
 
-                    tb.bitstream = new Uint32Array(bestBitstream.buffer.slice(0));
+                    tb.bitstream = new Uint32Array(peakBitstream.buffer.slice(0));
                 }
 
             } else {
@@ -790,10 +801,11 @@ function simulation()
         tb.draw(context);
         context.setTransform(1,0,0,1,0,0);
 
-        window.requestAnimationFrame(onFrame);
+        // Run as fast as possible
+        setTimeout(frame, 0);
     }
 
-    window.requestAnimationFrame(onFrame);
+    frame();
 }
 
 </script>
