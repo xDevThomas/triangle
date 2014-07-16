@@ -34,7 +34,7 @@ var TriangleBuilder = function()
     this.worldArea = this.worldSize * this.worldSize
 
     // Maximum triangle counts, based on maximum bitstream sizes
-    this.maxWords = 16;
+    this.maxWords = 64;
     this.maxBytes = this.maxWords * 4;
     this.maxTriangles = this.maxBytes * 8;
 
@@ -119,7 +119,7 @@ TriangleBuilder.prototype.clear = function()
 TriangleBuilder.prototype.toHexString = function()
 {
     // Convert the current bitstream to a string in hexadecimal notation,
-    // with each 32-bit word separated by a space, and up to 4 words per line.
+    // with each 32-bit word separated by a space, and up to 8 words per line.
     // Each line ends with a \n.
 
     var s = '';
@@ -127,13 +127,17 @@ TriangleBuilder.prototype.toHexString = function()
     var remaining = bitstream.length;
     var index = 0;
 
-    while (remaining >= 4) {
+    while (remaining >= 8) {
         s += ('0000000' + bitstream[index  ].toString(16)).substr(-8) + ' ' +
              ('0000000' + bitstream[index+1].toString(16)).substr(-8) + ' ' +
              ('0000000' + bitstream[index+2].toString(16)).substr(-8) + ' ' +
-             ('0000000' + bitstream[index+3].toString(16)).substr(-8) + '\n';
-        index += 4;
-        remaining -= 4;
+             ('0000000' + bitstream[index+3].toString(16)).substr(-8) + ' ' +
+             ('0000000' + bitstream[index+4].toString(16)).substr(-8) + ' ' +
+             ('0000000' + bitstream[index+5].toString(16)).substr(-8) + ' ' +
+             ('0000000' + bitstream[index+6].toString(16)).substr(-8) + ' ' +
+             ('0000000' + bitstream[index+7].toString(16)).substr(-8) + '\n';
+        index += 8;
+        remaining -= 8;
     }
 
     while (remaining > 1) {
@@ -709,11 +713,11 @@ function simulation()
                 var rWord = (r >>> 8) % length;          
                 bitstream[rWord] ^= 0xffffffff;
 
-            } else if (rType < 4) {
-                // Bit flip
+            } else {
+                // Bit flip x3
 
                 var rWord = (r >>> 8) % length;          
-                var rBit = 1 << ((r >>> 3) & 31);
+                var rBit = 0xd << ((r >>> 3) & 31);
                 bitstream[rWord] ^= rBit;
             }
 
@@ -723,8 +727,7 @@ function simulation()
 
     function frame()
     {
-        // We can run a few mutation cycles per frame
-        for (var cycle = 0; cycle < 2; cycle++) {
+        for (var cycle = 0; cycle < 1; cycle++) {
 
             // Model this shape from scratch on each frame
             mutate(4);
