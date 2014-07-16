@@ -22,9 +22,9 @@ var TriangleBuilder = function()
 
     // Force model
     this.k = 0.2;
-    this.pressureK = 1.0;
+    this.pressureK = 0.3;
     this.tensionK = 1.0;
-    this.surfaceTensionK = 1.0;
+    this.surfaceTensionK = 2.0;
     this.restingArea = 1.0;
 
     // Size of triangle memo buffer, and maximum size of shapes we can build.
@@ -34,7 +34,7 @@ var TriangleBuilder = function()
     this.worldArea = this.worldSize * this.worldSize
 
     // Maximum triangle counts, based on maximum bitstream sizes
-    this.maxWords = 64;
+    this.maxWords = 128;
     this.maxBytes = this.maxWords * 4;
     this.maxTriangles = this.maxBytes * 8;
 
@@ -116,45 +116,54 @@ TriangleBuilder.prototype.clear = function()
     this.generation++;
 }
 
-TriangleBuilder.prototype.trianglePath = function( ctx, tri )
+TriangleBuilder.prototype.drawTrianglePaths = function( ctx )
 {
-    // Create a path on a Canvas context, for triangle with the indicated ID.
-    // Coordinates are in simulation space; use the Canvas transform methods
-    // to scale, rotate, and position the shape.
+    // Draw a closed path for each triangle in the current shape.
+    // Does not set the style.
 
-    ctx.beginPath();
-
-    var begin = tri * this.pointsPerTriangle;
-    var end = (tri + 1) * this.pointsPerTriangle;
+    var numTriangles = this.numTriangles;
+    var pointsPerTriangle = this.pointsPerTriangle;
     var trianglePointIDs = this.trianglePointIDs;
-    var pX = this.pointX;
-    var pY = this.pointY;
+    var pointX = this.pointX;
+    var pointY = this.pointY;
+    var index = 0;
 
-    for (var i = begin; i < end; i++) {
-        var p = trianglePointIDs[i];
-        ctx.lineTo(pX[p], pY[p]);
+    for (var tri = 0; tri < numTriangles; tri++) {
+
+        ctx.beginPath();
+
+        for (var i = 0; i < pointsPerTriangle; i++) {
+            var p = trianglePointIDs[index++];
+            ctx.lineTo(pointX[p], pointY[p]);
+        }
+
+        ctx.closePath();
+        ctx.fill();
     }
-
-    ctx.closePath();
 }
 
-TriangleBuilder.prototype.edgePath = function( ctx, edge )
+TriangleBuilder.prototype.drawEdgePaths = function( ctx )
 {
-    // Create a path on a Canvas context, for edge with the indicated ID.
-    // Coordinates are in simulation space; use the Canvas transform methods
-    // to scale, rotate, and position the shape.
+    // Draw a line for each edge in the current shape.
+    // Does not set the style.
 
-    ctx.beginPath();
-
-    var begin = edge * this.pointsPerEdge;
-    var end = (edge + 1) * this.pointsPerEdge;
+    var numEdges = this.numEdges;
+    var pointsPerEdge = this.pointsPerEdge;
     var edgePointIDs = this.edgePointIDs;
-    var pX = this.pointX;
-    var pY = this.pointY;
+    var pointX = this.pointX;
+    var pointY = this.pointY;
+    var index = 0;
 
-    for (var i = begin; i < end; i++) {
-        var p = edgePointIDs[i];
-        ctx.lineTo(pX[p], pY[p]);
+    for (var edge = 0; edge < numEdges; edge++) {
+
+        ctx.beginPath();
+
+        for (var i = 0; i < pointsPerEdge; i++) {
+            var p = edgePointIDs[index++];
+            ctx.lineTo(pointX[p], pointY[p]);
+        }
+
+        ctx.stroke();
     }
 }
 
@@ -168,20 +177,12 @@ TriangleBuilder.prototype.draw = function( ctx )
     // to scale, rotate, and position the shape.
 
     ctx.fillStyle = this.triangleFillStyle;
-    for (var tri = 0; tri < this.numTriangles; tri++) {
-        this.trianglePath(ctx, tri);
-        ctx.fill();
-    }
+    this.drawTrianglePaths(ctx);
 
     ctx.strokeStyle = this.edgeStrokeStyle;
     ctx.lineWidth = this.edgeStrokeWidth;
     ctx.lineCap = 'round';
-
-    var numEdges = this.numEdges;
-    for (var edge = 0; edge < numEdges; edge++) {
-        this.edgePath(ctx, edge);
-        ctx.stroke();
-    }
+    this.drawEdgePaths(ctx);
 }
 
 TriangleBuilder.prototype._gridPoint = function(x, y)
@@ -619,27 +620,25 @@ function simulation()
 
     var center = [canvas.width/2, canvas.height/2];
     var unitRadius = canvas.width * 0.01;
+    var frames = 0;
 
     function onFrame(event)
     {
-        tb.clear();
-        for (var i = 0; i < tb.bitstream.length; i++) {
-            tb.bitstream[i] = i * mouse[1];
+        if (frames == 0) {
+            tb.clear();
+            for (var i = 0; i < tb.bitstream.length; i++) {
+                tb.bitstream[i] = i * mouse[1];
+            }
+            tb.build();
         }
-        tb.build();
+        frames++;
+        if (frames == 20) {
+            frames = 0;
+        }
+
         tb.simulate(100);
 
-        // Background
-        context.fillStyle = 'white';
-        context.fillRect(0, 0, canvas.width, canvas.height);
-
-        context.fillStyle = 'black';
-        context.font = "18px Futura";
-        context.fillText("Triangle / Play", 10, 30);
-        context.font = "12px Futura";
-        // context.fillText("Simulation step #" + stepNumber + " : " + 
-            // grid.graph.numTriangles + " triangles, " + grid.graph.numPoints + " points", 10, 50);
-        context.fillText("Micah Elizabeth Scott / 2014", 10, canvas.height - 10);
+        context.clearRect(0, 0, canvas.width, canvas.height);
 
         var s = 15;
         context.setTransform(s,0, 0,s, canvas.width/2, canvas.height/2);
@@ -653,9 +652,28 @@ function simulation()
 }
 
 </script>
+<style type='text/css'>
+
+    body {
+        font: 12px Futura;
+        margin: 0;
+        padding: 0;
+    }
+
+    h1 {
+        font-size: 18px;
+        margin: 20px;
+    }
+
+    p {
+        margin: 20px;
+    }
+
+</style>
 </head>
 <body onload='simulation()' >
-    <img id='image' />
+    <h1>Triangle / Play</h1>
     <canvas id='bitmap'></canvas>
+    <p>Micah Elizabeth Scott / 2014</p>
 </body>
 </html>
