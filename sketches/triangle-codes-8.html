@@ -787,7 +787,6 @@ function simulation()
     function cycle()
     {
         // Model this shape from scratch on each frame
-        mutate(4);
         tb.clear();
         tb.build();
         tb.simulate(200);
@@ -869,6 +868,10 @@ function simulation()
             // Store a reference image
             reference = img;
         }
+
+        // Mutate bitstream for next time. We want to try the unmutated
+        // saved bitstream on the first cycle.
+        mutate(4);
     }
 
     function frame()
