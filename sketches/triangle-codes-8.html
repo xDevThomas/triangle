@@ -676,7 +676,7 @@ function simulation()
     // criteria for mutations. Or we can allow a ratio larger than
     // 1.0 in order to allow some detrimental mutations to survive
     // in order to add noise to the system.
-    var peakRatioThreshold = 1.05;
+    var peakRatioThreshold = 1.01;
 
     function mutate( iters )
     {
@@ -691,7 +691,8 @@ function simulation()
             //   - Copy a word to another nearby location, up to 16 words away.
             //   - No-op
 
-            var r = 0 | (0xffffffff * random(1));
+            var r = 0 | (0xffffffff * random());
+            r ^= r >>> 16;
             var rType = r & 7;
         
             if (rType == 0) {
@@ -785,9 +786,16 @@ function simulation()
             var a = img.data;
             var b = reference.data;
             
-            // Look at only one channel per pixel
+            // Look at only alpha channel
             for (var i = 3, e = i+captureSize[0]*captureSize[1]*4; i != e; i+=4) {
                 var d = a[i] - b[i];
+
+                if (d > 0) {
+                    // Image is more opaque than reference; we have some overshoot.
+                    // Weight this as less significant.
+                    d >>= 2;
+                }
+
                 diff += d*d;
             } 
 
