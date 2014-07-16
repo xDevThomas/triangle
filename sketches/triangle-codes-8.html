@@ -34,7 +34,7 @@ var TriangleBuilder = function()
     this.worldArea = this.worldSize * this.worldSize
 
     // Maximum triangle counts, based on maximum bitstream sizes
-    this.maxWords = 128;
+    this.maxWords = 32;
     this.maxBytes = this.maxWords * 4;
     this.maxTriangles = this.maxBytes * 8;
 
@@ -114,6 +114,40 @@ TriangleBuilder.prototype.clear = function()
     this.numEdges = 0;
     this.numPoints = 0;
     this.generation++;
+}
+
+TriangleBuilder.prototype.toHexString = function()
+{
+    // Convert the current bitstream to a string in hexadecimal notation,
+    // with each 32-bit word separated by a space, and up to 4 words per line.
+    // Each line ends with a \n.
+
+    var s = '';
+    var bitstream = this.bitstream;
+    var remaining = bitstream.length;
+    var index = 0;
+
+    while (remaining >= 4) {
+        s += ('0000000' + bitstream[index  ].toString(16)).substr(-8) + ' ' +
+             ('0000000' + bitstream[index+1].toString(16)).substr(-8) + ' ' +
+             ('0000000' + bitstream[index+2].toString(16)).substr(-8) + ' ' +
+             ('0000000' + bitstream[index+3].toString(16)).substr(-8) + '\n';
+        index += 4;
+        remaining -= 4;
+    }
+
+    while (remaining > 1) {
+        s += ('0000000' + bitstream[index].toString(16)).substr(-8) + ' ';
+        index++;
+        remaining--;
+    };
+
+    while (remaining > 0) {
+        s += ('0000000' + bitstream[index].toString(16)).substr(-8) + '\n';
+        remaining--;
+    };
+
+    return s;
 }
 
 TriangleBuilder.prototype.drawTrianglePaths = function( ctx )
@@ -608,8 +642,8 @@ function simulation()
     var tb = new TriangleBuilder();
 
     var canvas = document.getElementById('bitmap');
-    canvas.width = 800;
-    canvas.height = 600;
+    canvas.width = 640;
+    canvas.height = 240;
 
     var context = canvas.getContext('2d');
     var mouse = [ 0, 0 ];
@@ -618,30 +652,141 @@ function simulation()
         mouse[1] = e.pageY - this.offsetTop;
     }
 
-    var center = [canvas.width/2, canvas.height/2];
     var unitRadius = canvas.width * 0.01;
-    var frames = 0;
+    var captureSize = [35, 25];
+    var captureXY = [45, 35];
+
+    var reference = null;
+    var bestBitstream = null;
+    var bestDiff = null;
+
+    // Random default bitstream
+    for (var i = 0; i < tb.bitstream.length; i++) {
+        tb.bitstream[i] = 0xffffffff*Math.random(1);
+    }
+
+    function mutate( iters )
+    {
+        var bitstream = tb.bitstream;
+        var length = bitstream.length;
+        var random = Math.random;
+
+        while (iters > 0) {
+            // Different types of changes:
+            //   - Flip a single bit
+            //   - Invert a word
+            //   - Copy a word to another nearby location, up to 16 words away.
+            //   - No-op
+
+            var r = 0 | (0xffffffff * random(1));
+            var rType = r & 3;
+        
+            if (rType == 0) {
+                // Copy a whole word to a random place.
+                // This encourages reuse at a word level, promoting the development of
+                // larger structures and evolving word-sized building blocks that replecate more
+                // when they're more useful toward the goal.
+
+                var rWord = (r >>> 8) % length;          
+                var rDelta = ((r >>> 3) & 31) - 16;
+                var rDest = rWord + rDelta;
+
+                if (rDest >= 0 && rDest < length) {
+                    bitstream[rDest] = bitstream[rWord];
+                }
+            } else if (rType == 1) { 
+                // Flip word. This lets the building blocks work in either chirality.
+              
+                var rWord = (r >>> 8) % length;          
+                bitstream[rWord] ^= 0xffffffff;
+
+            } else if (rType < 4) {
+                // Bit flip
+
+                var rWord = (r >>> 8) % length;          
+                var rBit = 1 << ((r >>> 3) & 31);
+                bitstream[rWord] ^= rBit;
+            }
+
+            iters--;
+        } 
+    }
 
     function onFrame(event)
     {
-        if (frames == 0) {
+        // We can run a few mutation cycles per frame
+        for (var cycle = 0; cycle < 4; cycle++) {
+
+            // Model this shape from scratch on each frame
+            mutate(4);
             tb.clear();
-            for (var i = 0; i < tb.bitstream.length; i++) {
-                tb.bitstream[i] = i * mouse[1];
-            }
             tb.build();
+            tb.simulate(100);
+
+            context.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (reference) {
+                // Capture a test image; a tiny black-and-white drawing of the shape
+                context.setTransform(1,0, 0,1, captureXY[0], captureXY[1]);
+                context.fillStyle = 'black';
+                tb.drawTrianglePaths(context);
+                context.setTransform(1,0,0,1,0,0);
+            } else {
+                // Capture the reference image: what we're trying to draw
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.font = '20px Futura';
+                context.fillStyle = 'black';
+                context.fillText('Art', captureXY[0], captureXY[1]);
+            }
+
+            // Capture the tiny image
+            var cx = captureXY[0] - captureSize[0]/2;
+            var cy = captureXY[1] - captureSize[1]/2;
+            var img = context.getImageData(cx, cy, captureSize[0], captureSize[1]);
+
+            if (reference) {
+                // Compare this image to the reference, and score how well it matches
+
+                var diff = 0;
+                var a = img.data;
+                var b = reference.data;
+                
+                for (var i = 0, e = captureSize[0]*captureSize[1]*4; i != e;) {
+                    var d1 = a[i] - b[i]; diff += d1*d1; i++;
+                    var d2 = a[i] - b[i]; diff += d2*d2; i++;
+                    var d3 = a[i] - b[i]; diff += d3*d3; i++;
+                    var d4 = a[i] - b[i]; diff += d4*d4; i++;
+                } 
+
+                if (bestDiff == null || diff < bestDiff) {
+                    // This is an improvement!
+
+                    bestDiff = diff;
+                    bestBitstream = new Uint32Array(tb.bitstream.buffer.slice(0));
+
+                    document.getElementById('code').textContent = tb.toHexString();
+
+                } else {
+                    // Nope. Revert.
+
+                    tb.bitstream = new Uint32Array(bestBitstream.buffer.slice(0));
+                }
+
+            } else {
+                // Store a reference image
+                reference = img;
+            }
         }
-        frames++;
-        if (frames == 20) {
-            frames = 0;
-        }
 
-        tb.simulate(100);
+        // Show the capture area
+        context.strokeStyle = '#dddddd';
+        context.lineWidth = 1.0;
+        context.strokeRect(cx, cy, captureSize[0], captureSize[1]);
 
-        context.clearRect(0, 0, canvas.width, canvas.height);
-
-        var s = 15;
-        context.setTransform(s,0, 0,s, canvas.width/2, canvas.height/2);
+        // Now draw a big one
+        var s = 12;
+        context.setTransform(s,0, 0,s, canvas.width * 0.5, canvas.height * 0.5);
         tb.draw(context);
         context.setTransform(1,0,0,1,0,0);
 
@@ -669,11 +814,18 @@ function simulation()
         margin: 20px;
     }
 
+    #code {
+        margin: 20px;
+        font: 18px Monospace;
+        color: #555;
+    }
+
 </style>
 </head>
 <body onload='simulation()' >
     <h1>Triangle / Play</h1>
     <canvas id='bitmap'></canvas>
+    <pre id='code'></pre>
     <p>Micah Elizabeth Scott / 2014</p>
 </body>
 </html>
