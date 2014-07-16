@@ -16,12 +16,14 @@ var TriangleBuilder = function()
     // (C) Micah Elizabeth Scott 2014
 
     // Default visual style
-    this.triangleFillStyle = '#54825d';
-    this.edgeStrokeStyle = '#2e4834';
+    this.triangleFillStyle = '#64a46b';
+    this.edgeStrokeStyle = '#3f6844';
     this.edgeStrokeWidth = 1/8;
+    this.borderStrokeStyle = '#101b12';
+    this.borderStrokeWidth = 0.35;
 
     // Force model
-    this.k = 0.2;
+    this.k = 0.1;
     this.pressureK = 0.3;
     this.tensionK = 1.0;
     this.surfaceTensionK = 2.0;
@@ -213,6 +215,11 @@ TriangleBuilder.prototype.draw = function( ctx )
     //
     // Coordinates are in simulation space; use the Canvas transform methods
     // to scale, rotate, and position the shape.
+
+    ctx.strokeStyle = this.borderStrokeStyle;
+    ctx.lineWidth = this.borderStrokeWidth;
+    ctx.lineCap = 'round';
+    this.drawEdgePaths(ctx);
 
     ctx.fillStyle = this.triangleFillStyle;
     this.drawTrianglePaths(ctx);
@@ -691,9 +698,9 @@ function simulation()
             //   - Copy a word to another nearby location, up to 16 words away.
             //   - No-op
 
-            var r = 0 | (0xffffffff * random());
+            var r = 0xffffffff * random();
             r ^= r >>> 16;
-            var rType = r & 7;
+            var rType = r & 15;
         
             if (rType == 0) {
                 // Copy a whole word to a random place.
@@ -701,8 +708,8 @@ function simulation()
                 // larger structures and evolving word-sized building blocks that replecate more
                 // when they're more useful toward the goal.
 
-                var rWord = (r >>> 8) % length;          
-                var rDelta = ((r >>> 3) & 31) - 16;
+                var rWord = (r >>> 9) % length;          
+                var rDelta = ((r >>> 4) & 31) - 16;
                 var rDest = rWord + rDelta;
 
                 if (rDest >= 0 && rDest < length) {
@@ -711,29 +718,41 @@ function simulation()
             } else if (rType == 1) { 
                 // Flip word. This lets the building blocks work in either chirality.
               
-                var rWord = (r >>> 8) % length;          
+                var rWord = (r >>> 9) % length;          
                 bitstream[rWord] ^= 0xffffffff;
 
             } else if (rType == 2) {
                 // Single bit flip
 
-                var rWord = (r >>> 8) % length;
-                var rBit = 1 << ((r >>> 3) & 31);
+                var rWord = (r >>> 9) % length;
+                var rBit = 1 << ((r >>> 4) & 31);
                 bitstream[rWord] ^= rBit;
 
-            } else if (rType <= 5) {
+            } else if (rType <= 10) {
                 // Nop
 
             } else {
                 // Bit Flip x3 in one word.
                 // (Rotation balanced)
 
-                var rWord = (r >>> 8) % length;          
-                var rt = r % 28;
-                var rBit1 = 1 << ((r >>> 3) & 31);
-                var rBit2 = 1 << ((rBit1 + 3 + rt) & 31);
-                var rBit3 = 1 << ((rBit1 + 3 + (rt>>>1)) & 31);
-                bitstream[rWord] ^= rBit1 ^ rBit2 ^ rBit3;
+                var rWord = (r >>> 9) % length;          
+
+                // Candidate bit locations
+                var r1 = r % 28;
+                var r2 = r >>> 4;
+                var r3 = (r1 + r2) >>> 1;
+
+                // Avoid duplicates
+                do {
+                    r2++;
+                    r2 &= 31;
+                } while (r2 == r1);
+                do {
+                    r3++;
+                    r3 &= 31;
+                } while (r3 == r2 || r3 == r1);
+
+                bitstream[rWord] ^= (1 << r1) ^ (1 << r2) ^ (1 << r3);
             }
 
             iters--;
@@ -742,7 +761,7 @@ function simulation()
 
     function largeTransform()
     {
-        var s = 11;
+        var s = 9;
         context.setTransform(s,0, 0,s, canvas.width * 0.5, canvas.height * 0.5);
     }
 
@@ -757,7 +776,7 @@ function simulation()
         mutate(4);
         tb.clear();
         tb.build();
-        tb.simulate(100);
+        tb.simulate(200);
 
         captureContext.fillStyle = 'white';
         captureContext.fillRect(0, 0, captureSize[0], captureSize[1]);
@@ -772,7 +791,7 @@ function simulation()
             // Capture the reference image: what we're trying to draw
             captureContext.textAlign = 'center';
             captureContext.textBaseline = 'middle';
-            captureContext.font = '20px Futura';
+            captureContext.font = '30px Futura';
             captureContext.fillStyle = 'black';
             captureContext.fillText('Art', captureXY[0], captureXY[1]);
         }
@@ -803,7 +822,7 @@ function simulation()
 
                 if (d < 0) {
                     // Decrease weight of overshoot (ref > current)
-                    d >>= 2;
+                    d >>= 1;
                 }
 
                 diff += d*d;
@@ -838,7 +857,7 @@ function simulation()
 
     function frame()
     {
-        for (var i = 0; i < 10; i++) {
+        for (var i = 0; i < 4; i++) {
             cycle();
         }
 
