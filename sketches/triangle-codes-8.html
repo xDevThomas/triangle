@@ -118,6 +118,19 @@ TriangleBuilder.prototype.clear = function()
     this.generation++;
 }
 
+TriangleBuilder.prototype.fromHexString = function( str )
+{
+    // Load a bitstream from hex digits in the provided string
+
+    // Discard all non-hex characters
+    str = str.replace(/[^0-9A-Fa-f]/g, '');
+
+    var bitstream = this.bitstream;
+    for (var i = 0; i < str.length / 8; i++) {
+        bitstream[i] = parseInt(str.substr(i*8, 8), 16);
+    }
+}
+
 TriangleBuilder.prototype.toHexString = function()
 {
     // Convert the current bitstream to a string in hexadecimal notation,
@@ -651,6 +664,7 @@ TriangleBuilder.prototype.simulate = function( steps )
 function simulation()
 {
     var tb = new TriangleBuilder();
+    tb.fromHexString(document.location.hash);
 
     var canvas = document.getElementById('bitmap');
     canvas.width = 800;
@@ -834,8 +848,10 @@ function simulation()
                 peakDiff = diff;
                 peakBitstream = new Uint32Array(tb.bitstream.buffer.slice(0));
 
-                document.getElementById('code').textContent =
-                    tb.toHexString();
+                var hexStr = tb.toHexString();
+
+                document.getElementById('code').textContent = hexStr;
+                document.location.hash = hexStr.replace(/[ \n]/g, '');
 
                 // Draw
                 context.clearRect(0, 0, canvas.width, canvas.height);
@@ -871,11 +887,12 @@ function simulation()
         noTransform();
 
         // Draw comparison image and reference
-
-        context.putImageData(reference, 10, 0);
-        context.globalAlpha = 0.5;
-        context.drawImage(captureCanvas, 10, 0);
-        context.globalAlpha = 1.0;
+        if (false) {
+            context.putImageData(reference, 10, 0);
+            context.globalAlpha = 0.5;
+            context.drawImage(captureCanvas, 10, 0);
+            context.globalAlpha = 1.0;
+        }
 
         // Run as fast as possible
         setTimeout(frame, 0);
