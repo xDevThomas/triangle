@@ -40,7 +40,7 @@ var TriangleBuilder = function()
 
     // Amount of simulation detail; each edge is simulated with many intermediate
     // points, to give the cells flexible walls that conform to their surroundings.
-    this.pointsPerEdge = 10;
+    this.pointsPerEdge = 7;
     this.maxEdges = this.maxTriangles * 3;
     this.pointsPerTriangle = (this.pointsPerEdge - 1) * 3;
     this.maxPoints = this.maxEdges * this.pointsPerEdge;
@@ -646,8 +646,8 @@ function simulation()
     var tb = new TriangleBuilder();
 
     var canvas = document.getElementById('bitmap');
-    canvas.width = 640;
-    canvas.height = 240;
+    canvas.width = 800;
+    canvas.height = 300;
 
     var context = canvas.getContext('2d');
     var mouse = [ 0, 0 ];
@@ -657,8 +657,13 @@ function simulation()
     }
 
     var unitRadius = canvas.width * 0.01;
-    var captureSize = [35, 25];
-    var captureXY = [45, 35];
+    var captureSize = [96, 96];
+    var captureXY = [captureSize[0]/2, captureSize[1]/2];
+
+    var captureCanvas = document.createElement('canvas');
+    captureCanvas.width = captureSize[0];
+    captureCanvas.height = captureSize[1];
+    var captureContext = captureCanvas.getContext('2d');
 
     var reference = null;
     var peakBitstream = null;
@@ -671,7 +676,7 @@ function simulation()
     // criteria for mutations. Or we can allow a ratio larger than
     // 1.0 in order to allow some detrimental mutations to survive
     // in order to add noise to the system.
-    var peakRatioThreshold = 1.1;
+    var peakRatioThreshold = 1.05;
 
     function mutate( iters )
     {
@@ -687,7 +692,7 @@ function simulation()
             //   - No-op
 
             var r = 0 | (0xffffffff * random(1));
-            var rType = r & 3;
+            var rType = r & 7;
         
             if (rType == 0) {
                 // Copy a whole word to a random place.
@@ -708,96 +713,125 @@ function simulation()
                 var rWord = (r >>> 8) % length;          
                 bitstream[rWord] ^= 0xffffffff;
 
+            } else if (rType == 2) {
+                // Single bit flip
+
+                var rWord = (r >>> 8) % length;
+                var rBit = 1 << ((r >>> 3) & 31);
+                bitstream[rWord] ^= rBit;
+
+            } else if (rType <= 5) {
+                // Nop
+
             } else {
-                // Bit flip x3
+                // Bit Flip x3 in one word.
+                // (Rotation balanced)
 
                 var rWord = (r >>> 8) % length;          
-                var rBit = 0xd << ((r >>> 3) & 31);
-                bitstream[rWord] ^= rBit;
+                var rt = r % 28;
+                var rBit1 = 1 << ((r >>> 3) & 31);
+                var rBit2 = 1 << ((rBit1 + 3 + rt) & 31);
+                var rBit3 = 1 << ((rBit1 + 3 + (rt>>>1)) & 31);
+                bitstream[rWord] ^= rBit1 ^ rBit2 ^ rBit3;
             }
 
             iters--;
         } 
     }
 
-    function frame()
+    function largeTransform()
     {
-        for (var cycle = 0; cycle < 1; cycle++) {
+        var s = 11;
+        context.setTransform(s,0, 0,s, canvas.width * 0.5, canvas.height * 0.5);
+    }
 
-            // Model this shape from scratch on each frame
-            mutate(4);
-            tb.clear();
-            tb.build();
-            tb.simulate(100);
+    function noTransform()
+    {
+        context.setTransform(1,0,0,1,0,0);
+    }
 
-            context.clearRect(0, 0, canvas.width, canvas.height);
+    function cycle()
+    {
+        // Model this shape from scratch on each frame
+        mutate(4);
+        tb.clear();
+        tb.build();
+        tb.simulate(100);
 
-            if (reference) {
-                // Capture a test image; a tiny black-and-white drawing of the shape
-                context.setTransform(1,0, 0,1, captureXY[0], captureXY[1]);
-                context.fillStyle = 'black';
-                tb.drawTrianglePaths(context);
-                context.setTransform(1,0,0,1,0,0);
-            } else {
-                // Capture the reference image: what we're trying to draw
-                context.textAlign = 'center';
-                context.textBaseline = 'middle';
-                context.font = '20px Futura';
-                context.fillStyle = 'black';
-                context.fillText('Art', captureXY[0], captureXY[1]);
-            }
+        captureContext.clearRect(0, 0, captureSize[0], captureSize[1]);
 
-            // Capture the tiny image
-            var cx = captureXY[0] - captureSize[0]/2;
-            var cy = captureXY[1] - captureSize[1]/2;
-            var img = context.getImageData(cx, cy, captureSize[0], captureSize[1]);
-
-            if (reference) {
-                // Compare this image to the reference, and score how well it matches
-
-                var diff = 0;
-                var a = img.data;
-                var b = reference.data;
-                
-                // Look at only one channel per pixel
-                for (var i = 3, e = i+captureSize[0]*captureSize[1]*4; i != e; i+=4) {
-                    var d = a[i] - b[i];
-                    diff += d*d;
-                } 
-
-                if (peakDiff == null || diff / peakDiff < peakRatioThreshold) {
-                    // This didn't do much harm. Keep it!
-
-                    peakDiff = diff;
-                    peakBitstream = new Uint32Array(tb.bitstream.buffer.slice(0));
-
-                    document.getElementById('code').textContent =
-                        tb.toHexString();
-
-                    console.log(peakDiff, peakBitstream);
-
-                } else {
-                    // Nope. Revert to saved peak.
-
-                    tb.bitstream = new Uint32Array(peakBitstream.buffer.slice(0));
-                }
-
-            } else {
-                // Store a reference image
-                reference = img;
-            }
+        if (reference) {
+            // Capture a test image; a tiny black-and-white drawing of the shape
+            captureContext.setTransform(1,0, 0,1, captureXY[0], captureXY[1]);
+            captureContext.fillStyle = 'black';
+            tb.drawTrianglePaths(captureContext);
+            captureContext.setTransform(1,0,0,1,0,0);
+        } else {
+            // Capture the reference image: what we're trying to draw
+            captureContext.textAlign = 'center';
+            captureContext.textBaseline = 'middle';
+            captureContext.font = '20px Futura';
+            captureContext.fillStyle = 'black';
+            captureContext.fillText('Art', captureXY[0], captureXY[1]);
         }
 
-        // Show the capture area
-        context.strokeStyle = '#dddddd';
-        context.lineWidth = 1.0;
-        context.strokeRect(cx, cy, captureSize[0], captureSize[1]);
+        // Capture the tiny image
+        var img = captureContext.getImageData(0, 0, captureSize[0], captureSize[1]);
 
-        // Now draw a big one
-        var s = 12;
-        context.setTransform(s,0, 0,s, canvas.width * 0.5, canvas.height * 0.5);
-        tb.draw(context);
-        context.setTransform(1,0,0,1,0,0);
+        if (reference) {
+            // Compare this image to the reference, and score how well it matches
+
+            var diff = 0;
+            var a = img.data;
+            var b = reference.data;
+            
+            // Look at only one channel per pixel
+            for (var i = 3, e = i+captureSize[0]*captureSize[1]*4; i != e; i+=4) {
+                var d = a[i] - b[i];
+                diff += d*d;
+            } 
+
+            if (peakDiff == null || diff / peakDiff < peakRatioThreshold) {
+                // This didn't do much harm. Keep it!
+
+                peakDiff = diff;
+                peakBitstream = new Uint32Array(tb.bitstream.buffer.slice(0));
+
+                document.getElementById('code').textContent =
+                    tb.toHexString();
+
+                // Draw
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                largeTransform();
+                tb.draw(context);
+                noTransform();
+
+            } else {
+                // Nope. Revert to saved peak.
+
+                tb.bitstream = new Uint32Array(peakBitstream.buffer.slice(0));
+            }
+
+        } else {
+            // Store a reference image
+            reference = img;
+        }
+    }
+
+    function frame()
+    {
+        for (var i = 0; i < 10; i++) {
+            cycle();
+        }
+
+        // Draw ghost image
+
+        context.strokeStyle = 'rgba(0,0,0,0.1)';
+        context.lineWidth = this.edgeStrokeWidth;
+        context.lineCap = 'round';
+        largeTransform();
+        tb.drawEdgePaths(context);
+        noTransform();
 
         // Run as fast as possible
         setTimeout(frame, 0);
