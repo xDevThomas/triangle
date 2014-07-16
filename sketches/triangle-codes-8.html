@@ -715,7 +715,7 @@ function simulation()
     function onFrame(event)
     {
         // We can run a few mutation cycles per frame
-        for (var cycle = 0; cycle < 4; cycle++) {
+        for (var cycle = 0; cycle < 10; cycle++) {
 
             // Model this shape from scratch on each frame
             mutate(4);
@@ -752,11 +752,10 @@ function simulation()
                 var a = img.data;
                 var b = reference.data;
                 
-                for (var i = 0, e = captureSize[0]*captureSize[1]*4; i != e;) {
-                    var d1 = a[i] - b[i]; diff += d1*d1; i++;
-                    var d2 = a[i] - b[i]; diff += d2*d2; i++;
-                    var d3 = a[i] - b[i]; diff += d3*d3; i++;
-                    var d4 = a[i] - b[i]; diff += d4*d4; i++;
+                // Look at only one channel per pixel
+                for (var i = 3, e = i+captureSize[0]*captureSize[1]*4; i != e; i+=4) {
+                    var d = a[i] - b[i];
+                    diff += d*d;
                 } 
 
                 if (bestDiff == null || diff < bestDiff) {
@@ -765,7 +764,8 @@ function simulation()
                     bestDiff = diff;
                     bestBitstream = new Uint32Array(tb.bitstream.buffer.slice(0));
 
-                    document.getElementById('code').textContent = tb.toHexString();
+                    document.getElementById('code').textContent =
+                        tb.toHexString() + diff;
 
                 } else {
                     // Nope. Revert.
